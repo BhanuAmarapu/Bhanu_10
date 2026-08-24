@@ -72,3 +72,8 @@ secrets.py
 
 # Artifacts (Gemini AI)
 .gemini/
+
+# Node dependencies
+node_modules/
+dist/
+
