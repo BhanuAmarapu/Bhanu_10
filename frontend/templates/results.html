@@ -1,0 +1,54 @@
+{% extends 'index.html' %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-10">
+        <div class="card border-0 shadow-lg rounded-4 overflow-hidden mb-4">
+            <div class="card-header bg-gradient bg-primary text-white py-4 text-center">
+                <h2 class="mb-0 fw-bold">Analysis Results for {{ filename }}</h2>
+            </div>
+            <div class="card-body p-5">
+                <div class="row g-4">
+                    <div class="col-md-6 border-end">
+                        <div class="text-center mb-4">
+                            <i class="bi bi-file-earmark-check h1 text-primary"></i>
+                            <h4 class="fw-bold">Identical File</h4>
+                        </div>
+                        <div
+                            class="alert {% if prediction == 'Duplicate Likely' %}alert-warning border-warning{% else %}alert-success border-success{% endif %} text-center py-3 rounded-3">
+                            <span class="h5 fw-bold">{{ prediction }}</span>
+                        </div>
+                        <p class="text-muted text-center px-4">Our model processed file metadata to optimize storage
+                            efficiency before final processing.</p>
+                    </div>
+                    <div class="col-md-6 ps-md-4">
+                        <div class="text-center mb-4">
+                            <i class="bi bi-arrow-repeat h1 text-success"></i>
+                            <h4 class="fw-bold">Readoption</h4>
+                        </div>
+                        {% if is_duplicate %}
+                        <div class="alert alert-info border-info text-center py-3 rounded-3">
+                            <span class="h5 fw-bold">Duplicate Detected</span>
+                        </div>
+                        <p class="text-center px-4">An identical copy exists in secure storage. We've mapped your access
+                            without duplicating data, saving space.</p>
+                        {% else %}
+                        <div class="alert alert-secondary border-secondary text-center py-3 rounded-3">
+                            <span class="h5 fw-bold">Verified Unique</span>
+                        </div>
+                        <p class="text-center px-4">Your file is unique. It has been AES-encrypted and stored securely
+                            in our private cloud cloud simulation.</p>
+                        {% endif %}
+                    </div>
+                </div>
+                <hr class="my-5">
+                <div class="d-flex justify-content-center gap-3">
+                    <a href="/upload" class="btn btn-primary btn-lg px-5 rounded-pill shadow-sm">Upload More</a>
+                    <a href="/dashboard" class="btn btn-outline-dark btn-lg px-5 rounded-pill shadow-sm">Go to
+                        Dashboard</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

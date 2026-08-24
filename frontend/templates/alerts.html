@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Security Alerts - Deduplication System</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        .navbar {
+            background: rgba(255, 255, 255, 0.95) !important;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        .container {
+            margin-top: 30px;
+            margin-bottom: 30px;
+        }
+
+        .alert-card {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+            margin-bottom: 20px;
+        }
+
+        .severity-badge {
+            font-size: 0.85rem;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-weight: 600;
+        }
+
+        .severity-LOW {
+            background-color: #d1ecf1;
+            color: #0c5460;
+        }
+
+        .severity-MEDIUM {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+
+        .severity-HIGH {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+
+        .severity-CRITICAL {
+            background-color: #dc3545;
+            color: white;
+        }
+
+        .alert-item {
+            border-left: 4px solid #667eea;
+            padding: 15px;
+            margin-bottom: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+        }
+
+        .alert-item:hover {
+            transform: translateX(5px);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .alert-item.dismissed {
+            opacity: 0.6;
+            border-left-color: #6c757d;
+        }
+
+        .alert-item.severity-CRITICAL {
+            border-left-color: #dc3545;
+        }
+
+        .alert-item.severity-HIGH {
+            border-left-color: #fd7e14;
+        }
+
+        .alert-item.severity-MEDIUM {
+            border-left-color: #ffc107;
+        }
+
+        .alert-item.severity-LOW {
+            border-left-color: #17a2b8;
+        }
+
+        .stats-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        .stats-card h3 {
+            font-size: 2.5rem;
+            margin: 0;
+        }
+
+        .stats-card p {
+            margin: 0;
+            opacity: 0.9;
+        }
+
+        .btn-dismiss {
+            background: #6c757d;
+            border: none;
+            color: white;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            transition: all 0.3s ease;
+        }
+
+        .btn-dismiss:hover {
+            background: #5a6268;
+            transform: scale(1.05);
+        }
+
+        .filter-section {
+            background: white;
+            padding: 20px;
+            border-radius: 15px;
+            margin-bottom: 20px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg navbar-light">
+        <div class="container-fluid">
+            <a class="navbar-brand fw-bold" href="{{ url_for('index') }}">
+                <i class="bi bi-shield-lock-fill text-primary"></i> Deduplication System
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav ms-auto">
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('dashboard') }}">
+                            <i class="bi bi-speedometer2"></i> Dashboard
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link active" href="{{ url_for('alerts') }}">
+                            <i class="bi bi-exclamation-triangle-fill"></i> Security Alerts
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('logout') }}">
+                            <i class="bi bi-box-arrow-right"></i> Logout
+                        </a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <!-- Page Header -->
+        <div class="alert-card">
+            <h1 class="mb-3">
+                <i class="bi bi-shield-exclamation text-danger"></i>
+                Security Alerts
+            </h1>
+            <p class="text-muted">Monitor suspicious upload activities and potential security threats</p>
+        </div>
+
+        <!-- Flash Messages -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+            {{ message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+        {% endfor %}
+        {% endif %}
+        {% endwith %}
+
+        <!-- Statistics -->
+        <div class="row mb-4">
+            <div class="col-md-4">
+                <div class="stats-card">
+                    <h3>{{ alerts|length }}</h3>
+                    <p>Total Alerts</p>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="stats-card" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">
+                    <h3>{{ alerts|selectattr('severity', 'equalto', 'CRITICAL')|list|length }}</h3>
+                    <p>Critical Alerts</p>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="stats-card" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);">
+                    <h3>{{ alerts|selectattr('is_dismissed', 'equalto', 0)|list|length }}</h3>
+                    <p>Active Alerts</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Filter Section -->
+        <div class="filter-section">
+            <div class="row align-items-center">
+                <div class="col-md-6">
+                    <h5 class="mb-0">
+                        <i class="bi bi-funnel"></i> Filter Alerts
+                    </h5>
+                </div>
+                <div class="col-md-6 text-end">
+                    <div class="form-check form-switch d-inline-block">
+                        <input class="form-check-input" type="checkbox" id="showDismissed" {% if include_dismissed
+                            %}checked{% endif %}
+                            onchange="window.location.href='{{ url_for('alerts') }}?dismissed=' + (this.checked ? 'true' : 'false')">
+                        <label class="form-check-label" for="showDismissed">
+                            Show Dismissed Alerts
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Alerts List -->
+        <div class="alert-card">
+            <h4 class="mb-4">
+                <i class="bi bi-list-ul"></i> Alert History
+            </h4>
+
+            {% if alerts %}
+            {% for alert in alerts %}
+            <div class="alert-item severity-{{ alert.severity }} {% if alert.is_dismissed %}dismissed{% endif %}">
+                <div class="row align-items-center">
+                    <div class="col-md-8">
+                        <div class="d-flex align-items-center mb-2">
+                            <span class="severity-badge severity-{{ alert.severity }} me-3">
+                                {{ alert.severity }}
+                            </span>
+                            <span class="badge bg-secondary me-2">{{ alert.activity_type.replace('_', ' ') }}</span>
+                            {% if alert.is_dismissed %}
+                            <span class="badge bg-dark">Dismissed</span>
+                            {% endif %}
+                        </div>
+                        <h6 class="mb-1">
+                            <i class="bi bi-person-fill"></i> User: <strong>{{ alert.username }}</strong> 
+                            {% if alert.email %}
+                            <span class="text-muted ms-2" style="font-size: 0.9em;"><i class="bi bi-envelope"></i> {{ alert.email }}</span>
+                            {% endif %}
+                        </h6>
+                        <div class="alert-description mt-2 p-2" style="background-color: rgba(255,255,255,0.7); border-radius: 5px; border-left: 3px solid #667eea;">
+                            <p class="mb-0 fw-bold"><i class="bi bi-file-earmark-text"></i> Alert Details:</p>
+                            <p class="mb-1">{{ alert.description }}</p>
+                        </div>
+                        <small class="text-muted mt-2 d-block">
+                            <i class="bi bi-clock"></i> {{ alert.timestamp }}
+                        </small>
+                        {% if alert.details %}
+                        <details class="mt-2">
+                            <summary style="cursor: pointer; color: #667eea;">
+                                <small>View Details</small>
+                            </summary>
+                            <pre class="mt-2 p-2 bg-light rounded" style="font-size: 0.85rem;">{{ alert.details }}</pre>
+                        </details>
+                        {% endif %}
+                    </div>
+                    <div class="col-md-4 text-end">
+                        {% if not alert.is_dismissed %}
+                        <form method="POST" action="{{ url_for('dismiss_alert', alert_id=alert.id) }}"
+                            style="display: inline;">
+                            <button type="submit" class="btn-dismiss">
+                                <i class="bi bi-check-circle"></i> Dismiss
+                            </button>
+                        </form>
+                        {% else %}
+                        <span class="text-muted">
+                            <i class="bi bi-check-circle-fill"></i> Dismissed
+                        </span>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+            {% else %}
+            <div class="text-center py-5">
+                <i class="bi bi-shield-check" style="font-size: 4rem; color: #28a745;"></i>
+                <h4 class="mt-3">No Alerts Found</h4>
+                <p class="text-muted">
+                    {% if include_dismissed %}
+                    No alerts in the system.
+                    {% else %}
+                    No active alerts. All clear!
+                    {% endif %}
+                </p>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Legend -->
+        <div class="alert-card">
+            <h5 class="mb-3">
+                <i class="bi bi-info-circle"></i> Alert Severity Levels
+            </h5>
+            <div class="row">
+                <div class="col-md-3">
+                    <span class="severity-badge severity-LOW">LOW</span>
+                    <p class="small text-muted mt-1">Minor anomalies</p>
+                </div>
+                <div class="col-md-3">
+                    <span class="severity-badge severity-MEDIUM">MEDIUM</span>
+                    <p class="small text-muted mt-1">Unusual patterns</p>
+                </div>
+                <div class="col-md-3">
+                    <span class="severity-badge severity-HIGH">HIGH</span>
+                    <p class="small text-muted mt-1">Suspicious behavior</p>
+                </div>
+                <div class="col-md-3">
+                    <span class="severity-badge severity-CRITICAL">CRITICAL</span>
+                    <p class="small text-muted mt-1">Potential threats</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+
+</html>

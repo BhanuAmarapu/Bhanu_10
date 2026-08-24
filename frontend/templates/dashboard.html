@@ -1,0 +1,601 @@
+{% extends 'index.html' %}
+
+{% block content %}
+<div class="container-fluid py-5">
+    <!-- Header Section -->
+    <div class="row mb-5 align-items-center">
+        <div class="col-lg-8">
+            <h1 class="display-5 fw-bold text-dark mb-2">Cloud Intelligence Dashboard</h1>
+            <p class="text-muted lead">Manage your secure hybrid storage with ML-enhanced deduplication.</p>
+        </div>
+        <div class="col-lg-4 text-lg-end">
+            <a href="/upload" class="btn btn-premium shadow">
+                <i class="bi bi-cloud-arrow-up-fill me-2"></i>New Secure Upload
+            </a>
+        </div>
+    </div>
+
+    <!-- Quick Stats -->
+    <div class="row g-4 mb-5">
+        <div class="col-md-3">
+            <div class="glass-card p-4">
+                <div class="d-flex justify-content-between mb-3">
+                    <div class="stat-icon">
+                        <i class="bi bi-files"></i>
+                    </div>
+                    <span class="badge border border-primary text-primary rounded-pill px-3 py-2">Unique</span>
+                </div>
+                <h3 class="fw-bold mb-1">{{ total_files }}</h3>
+                <p class="text-muted small mb-0">Processed Files</p>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="glass-card p-4">
+                <div class="d-flex justify-content-between mb-3">
+                    <div class="stat-icon" style="color: var(--secondary); background: #e8f5e9;">
+                        <i class="bi bi-recycle"></i>
+                    </div>
+                    <span class="badge border border-success text-success rounded-pill px-3 py-2">{{ dedup_rate }}%
+                        Saved</span>
+                </div>
+                <h3 class="fw-bold mb-1">{{ ( (logical_size - physical_size) / 1024 )|round(2) }} KB</h3>
+                <p class="text-muted small mb-0">Total Space Optimized</p>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="glass-card p-4">
+                <div class="d-flex justify-content-between mb-3">
+                    <div class="stat-icon" style="color: #00bcd4; background: #e0f7fa;">
+                        <i class="bi bi-hdd-network"></i>
+                    </div>
+                    <span class="badge border border-info text-info rounded-pill px-3 py-2">Capacity</span>
+                </div>
+                <h3 class="fw-bold mb-1">{{ (logical_size / 1024)|round(2) }} KB</h3>
+                <p class="text-muted small mb-0">Combined Logical Size</p>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="glass-card p-4">
+                <div class="d-flex justify-content-between mb-3">
+                    <div class="stat-icon" style="color: #ff9800; background: #fff3e0;">
+                        <i class="bi bi-cloud-check"></i>
+                    </div>
+                    <span class="badge border border-warning text-warning rounded-pill px-3 py-2">Cloud Sync</span>
+                </div>
+                <h3 class="fw-bold mb-1">{{ (physical_size / 1024)|round(2) }} KB</h3>
+                <p class="text-muted small mb-0">Actual Physical Storage</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- ML & AES Workflow Visualization -->
+    <div class="row mb-5">
+        <div class="col-12">
+            <div class="glass-card p-4">
+                <h5 class="mb-4 fw-bold"><i class="bi bi-diagram-3 me-2"></i>File Processing Workflow</h5>
+                <div class="workflow-container">
+                    <div class="workflow-step">
+                        <div class="workflow-icon"
+                            style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+                            <i class="bi bi-cloud-upload-fill text-white"></i>
+                        </div>
+                        <h6 class="mt-3 fw-bold">1. Upload</h6>
+                        <p class="small text-muted mb-0">File received from user</p>
+                    </div>
+
+                    <div class="workflow-arrow">
+                        <i class="bi bi-arrow-right text-primary"></i>
+                    </div>
+
+                    <div class="workflow-step">
+                        <div class="workflow-icon"
+                            style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">
+                            <i class="bi bi-cpu-fill text-white"></i>
+                        </div>
+                        <h6 class="mt-3 fw-bold">2. ML Prediction</h6>
+                        <p class="small text-muted mb-0">AI analyzes duplicate probability</p>
+                    </div>
+
+                    <div class="workflow-arrow">
+                        <i class="bi bi-arrow-right text-primary"></i>
+                    </div>
+
+                    <div class="workflow-step">
+                        <div class="workflow-icon"
+                            style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);">
+                            <i class="bi bi-fingerprint text-white"></i>
+                        </div>
+                        <h6 class="mt-3 fw-bold">3. Hash Check</h6>
+                        <p class="small text-muted mb-0">SHA-256 deduplication</p>
+                    </div>
+
+                    <div class="workflow-arrow">
+                        <i class="bi bi-arrow-right text-primary"></i>
+                    </div>
+
+                    <div class="workflow-step">
+                        <div class="workflow-icon"
+                            style="background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);">
+                            <i class="bi bi-shield-lock-fill text-white"></i>
+                        </div>
+                        <h6 class="mt-3 fw-bold">4. AES-256 Encryption</h6>
+                        <p class="small text-muted mb-0">Convergent encryption applied</p>
+                    </div>
+
+                    <div class="workflow-arrow">
+                        <i class="bi bi-arrow-right text-primary"></i>
+                    </div>
+
+                    <div class="workflow-step">
+                        <div class="workflow-icon"
+                            style="background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);">
+                            <i class="bi bi-hdd-network-fill text-white"></i>
+                        </div>
+                        <h6 class="mt-3 fw-bold">5. Storage</h6>
+                        <p class="small text-muted mb-0">Saved to S3/Local</p>
+                    </div>
+                </div>
+
+                <!-- Workflow Details -->
+                <div class="row mt-4 pt-4 border-top">
+                    <div class="col-md-6">
+                        <div class="p-3 bg-light rounded">
+                            <h6 class="fw-bold mb-3"><i class="bi bi-robot me-2 text-primary"></i>ML Prediction Engine
+                            </h6>
+                            <ul class="small mb-0">
+                                <li>Decision Tree Classifier</li>
+                                <li>Features: File size, extension, upload frequency</li>
+                                <li>Predicts duplicate likelihood before hashing</li>
+                                <li>Optimizes processing for unique files</li>
+                            </ul>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="p-3 bg-light rounded">
+                            <h6 class="fw-bold mb-3"><i class="bi bi-lock-fill me-2 text-success"></i>AES-256 CNS
+                                Encryption</h6>
+                            <ul class="small mb-0">
+                                <li>Convergent Narrowing Storage (CNS)</li>
+                                <li>Keys derived from file content hash</li>
+                                <li>Identical files → Identical ciphertext</li>
+                                <li>Enables secure deduplication</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-4">
+
+        <!-- Main Inventory -->
+        <div class="col-lg-9">
+            <div class="glass-card overflow-hidden">
+                <div class="p-4 border-bottom bg-light">
+                    <ul class="nav nav-pills card-header-pills" id="inventoryTabs" role="tablist">
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link active fw-bold me-2 px-4 rounded-pill" id="files-tab" data-bs-toggle="tab" data-bs-target="#files-pane" type="button" role="tab" aria-controls="files-pane" aria-selected="true">
+                                <i class="bi bi-files me-2"></i>Standard Files
+                            </button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link fw-bold px-4 rounded-pill" id="audio-tab" data-bs-toggle="tab" data-bs-target="#audio-pane" type="button" role="tab" aria-controls="audio-pane" aria-selected="false">
+                                <i class="bi bi-music-note-beamed me-2"></i>Audio Transcripts
+                            </button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link fw-bold px-4 rounded-pill ms-2" id="video-tab" data-bs-toggle="tab" data-bs-target="#video-pane" type="button" role="tab" aria-controls="video-pane" aria-selected="false">
+                                <i class="bi bi-play-btn me-2"></i>Videos
+                            </button>
+                        </li>
+                    </ul>
+                </div>
+                
+                <div class="tab-content" id="inventoryTabContent">
+                    <!-- Standard Files Tab -->
+                    <div class="tab-pane fade show active" id="files-pane" role="tabpanel" aria-labelledby="files-tab" tabindex="0">
+                        <div class="table-responsive">
+                            <table class="table premium-table align-middle mb-0">
+                                <thead>
+                                    <tr>
+                                        <th>Name & ID</th>
+                                        <th>Storage Engine</th>
+                                        <th>Size</th>
+                                        <th>Fingerprint</th>
+                                        <th class="text-end">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for file in files %}
+                                    <tr>
+                                        <td>
+                                            <div class="d-flex align-items-center">
+                                                <div class="flex-shrink-0">
+                                                    <i class="bi bi-file-earmark-code text-primary h3 mb-0"></i>
+                                                </div>
+                                                <div class="ms-3">
+                                                    <div class="fw-bold">{{ file.file_name }}</div>
+                                                    <small class="text-muted">ID: #{{ file.id }} | {{ file.upload_timestamp }}</small>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            {% if file.stored_path.startswith('s3://') %}
+                                            <span class="badge bg-info-subtle text-info border border-info-subtle rounded-pill px-3"><i class="bi bi-cloud-fill me-1"></i>S3 Bucket</span>
+                                            {% else %}
+                                            <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle rounded-pill px-3"><i class="bi bi-hdd-fill me-1"></i>Local Disk</span>
+                                            {% endif %}
+                                        </td>
+                                        <td><span class="fw-bold">{{ (file.file_size / 1024)|round(2) }} KB</span></td>
+                                        <td><code class="text-primary small">{{ file.file_hash[:12] }}...</code></td>
+                                        <td class="text-end">
+                                            <div class="dropdown">
+                                                <button class="btn btn-link text-muted p-0" data-bs-toggle="dropdown">
+                                                    <i class="bi bi-three-dots-vertical h5"></i>
+                                                </button>
+                                                <ul class="dropdown-menu dropdown-menu-end shadow border-0 p-2 mt-2">
+                                                    {% if current_user.role == 'admin' %}
+                                                    <li><a class="dropdown-item py-2" href="/view/{{ file.id }}"><i class="bi bi-download me-2 text-info"></i>Open Original</a></li>
+                                                    <li>
+                                                        <hr class="dropdown-divider">
+                                                    </li>
+                                                    {% endif %}
+                                                    <li><a class="dropdown-item py-2" href="/audit/{{ file.id }}"><i class="bi bi-shield-check me-2 text-success"></i>Integrity Audit</a></li>
+                                                    {% if current_user.role == 'admin' %}
+                                                    <li>
+                                                        <hr class="dropdown-divider">
+                                                    </li>
+                                                    <li><button class="dropdown-item py-2" data-bs-toggle="modal" data-bs-target="#renameModal{{ file.id }}"><i class="bi bi-pencil me-2 text-warning"></i>Rename</button></li>
+                                                    <li><button class="dropdown-item text-danger py-2" data-bs-toggle="modal" data-bs-target="#deleteModal{{ file.id }}"><i class="bi bi-trash3 me-2"></i>Delete Forever</button></li>
+                                                    {% endif %}
+                                                </ul>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    
+                    <!-- Audio Transcripts Tab -->
+                    <div class="tab-pane fade" id="audio-pane" role="tabpanel" aria-labelledby="audio-tab" tabindex="0">
+                        <div class="table-responsive">
+                            <table class="table premium-table align-middle mb-0">
+                                <thead>
+                                    <tr>
+                                        <th>Audio File Info</th>
+                                        <th>Language</th>
+                                        <th>Duration</th>
+                                        <th>S3 Key</th>
+                                        <th>Highest Similarity</th>
+                                        <th>Transcript Preview</th>
+                                        <th class="text-end">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for audio in audio_records %}
+                                    <tr>
+                                        <td>
+                                            <div class="d-flex align-items-center">
+                                                <div class="flex-shrink-0">
+                                                    <i class="bi bi-file-earmark-music-fill text-warning h3 mb-0"></i>
+                                                </div>
+                                                <div class="ms-3">
+                                                    <div class="fw-bold">{{ audio.original_filename }}</div>
+                                                    <small class="text-muted">ID: #{{ audio.id }} | {{ audio.upload_timestamp }}</small>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            {% if audio.status == 'pending_confirmation' %}
+                                                <span class="badge bg-danger rounded-pill px-3">PENDING</span>
+                                            {% else %}
+                                                <span class="badge bg-secondary rounded-pill px-3">{{ audio.language|upper }}</span>
+                                            {% endif %}
+                                        </td>
+                                        <td><span class="fw-bold">{{ audio.duration|round(2) }} s</span></td>
+                                        <td>
+                                            <code class="text-secondary small" title="{{ audio.s3_object_key }}">{{ audio.s3_object_key[:20] }}...</code>
+                                        </td>
+                                        <td>
+                                            {% if audio.similarity_score is not none %}
+                                                <span class="badge {% if audio.similarity_score >= 0.6 %}bg-danger text-white{% else %}bg-success{% endif %} rounded-pill px-3">
+                                                    {{ (audio.similarity_score * 100)|round(2) }}%
+                                                </span>
+                                            {% else %}
+                                                <span class="badge bg-light text-muted border rounded-pill px-3">N/A</span>
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            {% if audio.status == 'pending_confirmation' %}
+                                                <div class="small text-truncate text-danger fw-bold" style="max-width: 250px;" title="Warning: Highly similar audio file already exists. Please confirm store or cancel.">
+                                                    ⚠️ Similar to existing file
+                                                </div>
+                                            {% else %}
+                                                <div class="small text-truncate text-muted" style="max-width: 250px;" title="{{ audio.transcript }}">
+                                                    {{ audio.transcript }}
+                                                </div>
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            <div class="d-flex justify-content-end gap-2">
+                                                {% if audio.status == 'pending_confirmation' %}
+                                                    <form action="/audio/confirm_store/{{ audio.id }}" method="POST" class="d-inline">
+                                                        <button type="submit" class="btn btn-sm btn-success rounded-pill px-3">
+                                                            <i class="bi bi-check-lg me-1"></i>Store anyway
+                                                        </button>
+                                                    </form>
+                                                    <form action="/audio/delete/{{ audio.id }}" method="POST" class="d-inline" onsubmit="return confirm('Are you sure you want to discard this upload?');">
+                                                        <button type="submit" class="btn btn-sm btn-danger rounded-pill px-3">
+                                                            <i class="bi bi-x-lg me-1"></i>Don't Store
+                                                        </button>
+                                                    </form>
+                                                {% else %}
+                                                    <a href="/audio/open/{{ audio.id }}" class="btn btn-sm btn-outline-primary rounded-pill px-3" target="_blank">
+                                                        <i class="bi bi-play-fill me-1"></i>Open
+                                                    </a>
+                                                    <button class="btn btn-sm btn-outline-secondary rounded-pill px-3" onclick="renameAudio({{ audio.id }}, '{{ audio.original_filename|escape }}')">
+                                                        <i class="bi bi-pencil-square me-1"></i>Rename
+                                                    </button>
+                                                    <form action="/audio/delete/{{ audio.id }}" method="POST" class="d-inline" onsubmit="return confirm('Are you sure you want to delete this audio file?');">
+                                                        <button type="submit" class="btn btn-sm btn-outline-danger rounded-pill px-3">
+                                                            <i class="bi bi-trash-fill me-1"></i>Delete
+                                                        </button>
+                                                    </form>
+                                                {% endif %}
+                                            </div>
+                                        </td>
+                                    </tr>
+                                    {% else %}
+                                    <tr>
+                                        <td colspan="7" class="text-center py-5 text-muted">
+                                            <i class="bi bi-music-note-mute display-6 mb-3 d-block text-warning"></i>
+                                            <div class="fw-bold mb-1">No audio transcripts processed yet</div>
+                                            <small class="text-muted">Upload audio files (mp3, wav, aac, etc.) to run speech-to-text similarity intelligence.</small>
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Video Tab Pane -->
+                    <div class="tab-pane fade" id="video-pane" role="tabpanel" aria-labelledby="video-tab" tabindex="0">
+                        <div class="table-responsive">
+                            <table class="table premium-table align-middle mb-0">
+                                <thead>
+                                    <tr>
+                                        <th>Video File Info</th>
+                                        <th>Status</th>
+                                        <th>Duration</th>
+                                        <th>S3 Key</th>
+                                        <th>Highest Similarity</th>
+                                        <th>Transcript Preview</th>
+                                        <th class="text-end">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for video in video_records %}
+                                    <tr>
+                                        <td>
+                                            <div class="d-flex align-items-center">
+                                                <div class="flex-shrink-0">
+                                                    <i class="bi bi-file-earmark-play-fill text-danger h3 mb-0"></i>
+                                                </div>
+                                                <div class="ms-3">
+                                                    <div class="fw-bold">{{ video.original_filename }}</div>
+                                                    <small class="text-muted">ID: #{{ video.id }} | {{ video.upload_timestamp }}</small>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            {% if video.status == 'pending_confirmation' %}
+                                                <span class="badge bg-danger rounded-pill px-3">PENDING</span>
+                                            {% elif video.status == 'processing' %}
+                                                <span class="badge bg-warning text-dark rounded-pill px-3">PROCESSING</span>
+                                            {% else %}
+                                                <span class="badge bg-secondary rounded-pill px-3">{{ (video.language or 'en')|upper }}</span>
+                                            {% endif %}
+                                        </td>
+                                        <td><span class="fw-bold">{{ (video.duration or 0.0)|round(2) }} s</span></td>
+                                        <td>
+                                            <code class="text-secondary small" title="{{ video.s3_object_key }}">{{ video.s3_object_key[:20] }}...</code>
+                                        </td>
+                                        <td>
+                                            {% if video.similarity_score is not none %}
+                                                <span class="badge {% if video.similarity_score >= 0.6 %}bg-danger text-white{% else %}bg-success{% endif %} rounded-pill px-3">
+                                                    {{ (video.similarity_score * 100)|round(2) }}%
+                                                </span>
+                                            {% else %}
+                                                <span class="badge bg-light text-muted border rounded-pill px-3">N/A</span>
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            {% if video.status == 'pending_confirmation' %}
+                                                <div class="small text-truncate text-danger fw-bold" style="max-width: 250px;" title="Warning: Highly similar speech in another video file already exists. Please confirm store or cancel.">
+                                                    ⚠️ Similar to existing file
+                                                </div>
+                                            {% else %}
+                                                <div class="small text-truncate text-muted" style="max-width: 250px;" title="{{ video.transcript or 'No transcript available.' }}">
+                                                    {{ video.transcript or 'No transcript available.' }}
+                                                </div>
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            <div class="d-flex justify-content-end gap-2">
+                                                {% if video.status == 'pending_confirmation' %}
+                                                    <form action="/video/confirm_store/{{ video.id }}" method="POST" class="d-inline">
+                                                        <button type="submit" class="btn btn-sm btn-warning px-3 rounded-pill text-dark fw-bold">
+                                                            Store Anyway
+                                                        </button>
+                                                    </form>
+                                                    <form action="/video/delete/{{ video.id }}" method="POST" class="d-inline" onsubmit="return confirm('Are you sure you want to discard this video upload?');">
+                                                        <button type="submit" class="btn btn-sm btn-outline-secondary px-3 rounded-pill">
+                                                            Don't Store
+                                                        </button>
+                                                    </form>
+                                                {% elif video.status == 'processing' %}
+                                                    <button class="btn btn-sm btn-light border px-3 rounded-pill text-muted" disabled>
+                                                        <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                                                        Processing...
+                                                    </button>
+                                                {% else %}
+                                                    <a href="/video/open/{{ video.id }}" class="btn btn-sm btn-outline-primary rounded-pill px-3" target="_blank">
+                                                        <i class="bi bi-play-fill me-1"></i>Open
+                                                    </a>
+                                                    <button class="btn btn-sm btn-outline-secondary rounded-pill px-3" onclick="renameVideo({{ video.id }}, '{{ video.original_filename|escape }}')">
+                                                        <i class="bi bi-pencil-square me-1"></i>Rename
+                                                    </button>
+                                                    <form action="/video/delete/{{ video.id }}" method="POST" class="d-inline" onsubmit="return confirm('Are you sure you want to delete this video file?');">
+                                                        <button type="submit" class="btn btn-sm btn-outline-danger rounded-pill px-3">
+                                                            <i class="bi bi-trash-fill me-1"></i>Delete
+                                                        </button>
+                                                    </form>
+                                                {% endif %}
+                                            </div>
+                                        </td>
+                                    </tr>
+                                    {% else %}
+                                    <tr>
+                                        <td colspan="7" class="text-center py-5 text-muted">
+                                            <i class="bi bi-play-btn-slice display-6 mb-3 d-block text-danger"></i>
+                                            <div class="fw-bold mb-1">No video files uploaded yet</div>
+                                            <small class="text-muted">Upload video files (mp4, avi, mov, etc.) to run speech-to-text similarity intelligence.</small>
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Modals outside the table to prevent UI issues -->
+            {% for file in files %}
+            <!-- Rename Modal -->
+            <div class="modal fade" id="renameModal{{ file.id }}" tabindex="-1" aria-hidden="true">
+                <div class="modal-dialog modal-dialog-centered">
+                    <div class="modal-content">
+                        <form action="/rename/{{ file.id }}" method="POST">
+                            <div class="modal-header">
+                                <h5 class="modal-title fw-bold">Rename File</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal"
+                                    aria-label="Close"></button>
+                            </div>
+                            <div class="modal-body text-start">
+                                <label class="text-muted small mb-2">New display name</label>
+                                <input type="text" name="new_name" class="form-control" value="{{ file.file_name }}"
+                                    required>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-link text-muted text-decoration-none"
+                                    data-bs-dismiss="modal">Cancel</button>
+                                <button type="submit" class="btn btn-premium px-4">Update Name</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Delete Modal -->
+            <div class="modal fade" id="deleteModal{{ file.id }}" tabindex="-1" aria-hidden="true">
+                <div class="modal-dialog modal-dialog-centered">
+                    <div class="modal-content">
+                        <form action="/delete/{{ file.id }}" method="POST">
+                            <div class="modal-header">
+                                <h5 class="modal-title fw-bold text-danger"><i
+                                        class="bi bi-exclamation-triangle-fill me-2"></i>Permanently Delete?</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal"
+                                    aria-label="Close"></button>
+                            </div>
+                            <div class="modal-body text-start">
+                                <p class="text-muted mb-0">Are you sure you want to delete <strong>{{ file.file_name
+                                        }}</strong>? This action cannot be undone.</p>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-link text-muted text-decoration-none"
+                                    data-bs-dismiss="modal">Keep File</button>
+                                <button type="submit" class="btn btn-danger rounded-pill px-4">Yes, Delete</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <!-- Sidebar logs -->
+        <div class="col-lg-3">
+            <div class="glass-card">
+                <div class="p-4 border-bottom bg-light">
+                    <h5 class="mb-0 fw-bold"><i class="bi bi-activity me-2"></i>Security Logs</h5>
+                </div>
+                <div class="p-0">
+                    <div class="list-group list-group-flush">
+                        {% for log in audit_logs %}
+                        <div class="list-group-item p-3 border-0 border-bottom">
+                            <div class="d-flex align-items-center mb-1">
+                                <div class="flex-shrink-0">
+                                    <div class="stat-icon p-0 w-8 h-8 small {% if log.audit_status == 'Success' %}text-success{% else %}text-danger{% endif %}"
+                                        style="width:32px; height:32px; font-size: 0.9rem; background: #e0f7fa;">
+                                        <i
+                                            class="bi bi-{% if log.audit_status == 'Success' %}shield-check{% else %}shield-exclamation{% endif %}"></i>
+                                    </div>
+                                </div>
+                                <div class="ms-2">
+                                    <div class="small fw-bold">{{ log.file_name }}</div>
+                                    <small class="text-muted">{{ (log.timestamp|string).split(' ')[1] }}</small>
+                                </div>
+                            </div>
+                            <p class="mb-0 small text-muted lh-sm">{{ log.message }}</p>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function renameAudio(audioId, currentName) {
+    const newName = prompt("Rename Audio File:", currentName);
+    if (newName && newName.trim() !== "" && newName !== currentName) {
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = '/audio/rename/' + audioId;
+        
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'new_name';
+        input.value = newName.trim();
+        
+        form.appendChild(input);
+        document.body.appendChild(form);
+        form.submit();
+    }
+}
+
+function renameVideo(videoId, currentName) {
+    const newName = prompt("Rename Video File:", currentName);
+    if (newName && newName.trim() !== "" && newName !== currentName) {
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = '/video/rename/' + videoId;
+        
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'new_name';
+        input.value = newName.trim();
+        
+        form.appendChild(input);
+        document.body.appendChild(form);
+        form.submit();
+    }
+}
+</script>
+{% endblock %}

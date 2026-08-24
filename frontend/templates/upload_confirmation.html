@@ -1,0 +1,354 @@
+{% extends 'index.html' %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="row justify-content-center">
+        <div class="col-lg-8">
+            <!-- ML Alert Card -->
+            <div class="glass-card p-4 mb-4">
+                <div class="text-center mb-4">
+                    {% if match_type == 'moderation_flagged' %}
+                    <div class="alert-icon mx-auto mb-3"
+                        style="width: 80px; height: 80px; background: linear-gradient(135deg, #f857a6 0%, #ff5858 100%); border-radius: 50%; display: flex; align-items: center; justify-content: center;">
+                        <i class="bi bi-shield-x text-white" style="font-size: 2.5rem;"></i>
+                    </div>
+                    <h3 class="fw-bold mb-2 text-danger">⚠️ Content Moderation Warning</h3>
+                    <p class="text-muted">AI safety analysis flagged this file for potential policy violation</p>
+                    {% elif match_type == 'identical' %}
+                    <div class="alert-icon mx-auto mb-3"
+                        style="width: 80px; height: 80px; background: linear-gradient(135deg, #ff416c 0%, #ff4b2b 100%); border-radius: 50%; display: flex; align-items: center; justify-content: center;">
+                        <i class="bi bi-exclamation-triangle-fill text-white" style="font-size: 2.5rem;"></i>
+                    </div>
+                    <h3 class="fw-bold mb-2 text-danger">🔴 Identical File Found!</h3>
+                    <p class="text-muted">An exact copy of this file already exists in the system</p>
+                    {% else %}
+                    <div class="alert-icon mx-auto mb-3"
+                        style="width: 80px; height: 80px; background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); border-radius: 50%; display: flex; align-items: center; justify-content: center;">
+                        <i class="bi bi-exclamation-triangle-fill text-white" style="font-size: 2.5rem;"></i>
+                    </div>
+                    <h3 class="fw-bold mb-2">⚠️ Potential Duplicate Detected</h3>
+                    <p class="text-muted">ML Prediction Engine has analyzed your file</p>
+                    {% endif %}
+                </div>
+
+                <!-- ML Analysis Results -->
+                <div class="row mb-4">
+                    <div class="col-md-4">
+                        <div class="p-3 bg-light rounded text-center">
+                            <i class="bi bi-robot text-primary" style="font-size: 2rem;"></i>
+                            <h6 class="mt-2 mb-1 fw-bold">
+                                {% if match_type == 'moderation_flagged' %}
+                                Match Similarity
+                                {% else %}
+                                ML Confidence
+                                {% endif %}
+                            </h6>
+                            <span class="badge bg-{{ 'danger' if ml_confidence == 'High' or match_type == 'moderation_flagged' else 'warning' }} px-3 py-2">
+                                {% if match_type == 'moderation_flagged' %}
+                                {{ (moderation_result.confidence_score * 100)|round(1) }}% Match
+                                {% else %}
+                                {{ ml_confidence }}
+                                {% endif %}
+                            </span>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="p-3 bg-light rounded text-center">
+                            <i class="bi bi-file-earmark text-info" style="font-size: 2rem;"></i>
+                            <h6 class="mt-2 mb-1 fw-bold">File Size</h6>
+                            <p class="mb-0">{{ (file_size / 1024)|round(2) }} KB</p>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="p-3 bg-light rounded text-center">
+                            <i class="bi bi-fingerprint text-success" style="font-size: 2rem;"></i>
+                            <h6 class="mt-2 mb-1 fw-bold">File Hash</h6>
+                            <p class="mb-0"><code class="small">{{ file_hash[:12] }}...</code></p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- File Info -->
+                <div class="alert alert-info border-0">
+                    <h6 class="fw-bold mb-2"><i class="bi bi-info-circle me-2"></i>Uploading:</h6>
+                    <p class="mb-0"><strong>{{ filename }}</strong></p>
+                </div>
+            </div>
+
+            <!-- Moderation Warning Details -->
+            {% if match_type == 'moderation_flagged' %}
+            <div class="glass-card p-4 mb-4 border border-danger">
+                <h5 class="fw-bold mb-3 text-danger">
+                    <i class="bi bi-shield-fill-exclamation me-2"></i>
+                    AI Safety Check Flagged ({{ moderation_result.violation_type }})
+                </h5>
+                <div class="alert alert-danger border-0 mb-3">
+                    <p class="mb-0"><strong>Confidence:</strong> {{ (moderation_result.confidence_score * 100)|round(1) }}% Match</p>
+                    <p class="mb-0 mt-2"><strong>Reason/Details:</strong> {{ moderation_result.violation_details }}</p>
+                    {% if moderation_result.flagged_keywords %}
+                    <p class="mb-0 mt-2"><strong>Flagged Keywords:</strong> {{ ', '.join(moderation_result.flagged_keywords) }}</p>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Identical Files Found (Exact Match) -->
+            {% if identical_files %}
+            <div class="glass-card p-4 mb-4 border border-danger">
+                <h5 class="fw-bold mb-3 text-danger">
+                    <i class="bi bi-shield-fill-exclamation me-2"></i>
+                    Identical Files Found ({{ identical_files|length }})
+                </h5>
+                <div class="alert alert-danger border-0 mb-3">
+                    <small><i class="bi bi-info-circle me-2"></i><strong>100% Match:</strong> These files have the exact
+                        same content (hash match). Uploading will create a reference to the existing file.</small>
+                </div>
+
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-danger">
+                            <tr>
+                                <th>File Name</th>
+                                <th>Size</th>
+                                <th>Uploaded</th>
+                                <th>Storage Location</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for file in identical_files %}
+                            <tr>
+                                <td>
+                                    <i class="bi bi-file-earmark-fill text-danger me-2"></i>
+                                    <strong>{{ file.file_name }}</strong>
+                                    <span class="badge bg-danger ms-2">EXACT MATCH</span>
+                                </td>
+                                <td>{{ (file.file_size / 1024)|round(2) }} KB</td>
+                                <td><small class="text-muted">{{ file.upload_timestamp }}</small></td>
+                                <td>
+                                    {% if file.stored_path.startswith('s3://') %}
+                                    <span class="badge bg-primary">
+                                        <i class="bi bi-cloud-fill me-1"></i>S3 Bucket
+                                    </span>
+                                    <br><small class="text-muted">{{ file.stored_path }}</small>
+                                    {% else %}
+                                    <span class="badge bg-secondary">
+                                        <i class="bi bi-hdd-fill me-1"></i>Local Storage
+                                    </span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <a href="{{ url_for('view_file', file_id=file.id) }}" class="btn btn-sm btn-success"
+                                        title="Download/Read this file">
+                                        <i class="bi bi-download"></i> Download
+                                    </a>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Near-Duplicate Files (Content Similarity 90%+) -->
+        {% if near_duplicate_files %}
+        <div class="glass-card p-4 mb-4 border border-warning">
+            <h5 class="fw-bold mb-3 text-warning">
+                <i class="bi bi-diagram-3 me-2"></i>
+                Near-Duplicate Files Found ({{ near_duplicate_files|length }})
+            </h5>
+            <div class="alert alert-warning border-0 mb-3">
+                <small><i class="bi bi-info-circle me-2"></i><strong>Content Similarity:</strong> These files have
+                    similar content (60%+ match) but different names or sizes. They may be renamed or slightly modified
+                    versions.</small>
+            </div>
+
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-warning">
+                        <tr>
+                            <th>File Name</th>
+                            <th>Size</th>
+                            <th>Content Match</th>
+                            <th>Uploaded</th>
+                            <th>Storage Location</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for file in near_duplicate_files %}
+                        <tr>
+                            <td>
+                                <i class="bi bi-file-earmark-fill text-warning me-2"></i>
+                                <strong>{{ file.file_name }}</strong>
+                            </td>
+                            <td>{{ (file.file_size / 1024)|round(2) }} KB</td>
+                            <td>
+                                <span class="badge bg-{{ 'danger' if file.similarity >= 0.95 else 'warning' }} fs-6">
+                                    {{ (file.similarity * 100)|round(1) }}% Similar
+                                </span>
+                            </td>
+                            <td><small class="text-muted">{{ file.upload_timestamp }}</small></td>
+                            <td>
+                                {% if file.stored_path.startswith('s3://') %}
+                                <span class="badge bg-primary">
+                                    <i class="bi bi-cloud-fill me-1"></i>S3 Bucket
+                                </span>
+                                <br><small class="text-muted">{{ file.stored_path }}</small>
+                                {% else %}
+                                <span class="badge bg-secondary">
+                                    <i class="bi bi-hdd-fill me-1"></i>Local Storage
+                                </span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <a href="{{ url_for('view_file', file_id=file.id) }}" class="btn btn-sm btn-success"
+                                    title="Download/Read this file">
+                                    <i class="bi bi-download"></i> Download
+                                </a>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Similar Files Found (Metadata Match) -->
+        {% if similar_files %}
+        <div class="glass-card p-4 mb-4">
+            <h5 class="fw-bold mb-3">
+                <i class="bi bi-files me-2 text-warning"></i>
+                Similar Files Found ({{ similar_files|length }})
+            </h5>
+            <p class="text-muted small mb-3">These files have similar names or sizes but different content:</p>
+
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="bg-light">
+                        <tr>
+                            <th>File Name</th>
+                            <th>Size</th>
+                            <th>Uploaded</th>
+                            <th>Storage Location</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for file in similar_files %}
+                        <tr>
+                            <td>
+                                <i class="bi bi-file-earmark-fill text-warning me-2"></i>
+                                <strong>{{ file.file_name }}</strong>
+                            </td>
+                            <td>{{ (file.file_size / 1024)|round(2) }} KB</td>
+                            <td><small class="text-muted">{{ file.upload_timestamp }}</small></td>
+                            <td>
+                                {% if file.stored_path.startswith('s3://') %}
+                                <span class="badge bg-primary">
+                                    <i class="bi bi-cloud-fill me-1"></i>S3 Bucket
+                                </span>
+                                <br><small class="text-muted">{{ file.stored_path }}</small>
+                                {% else %}
+                                <span class="badge bg-secondary">
+                                    <i class="bi bi-hdd-fill me-1"></i>Local Storage
+                                </span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <a href="{{ url_for('view_file', file_id=file.id) }}" class="btn btn-sm btn-success"
+                                    title="Download/Read this file">
+                                    <i class="bi bi-download"></i> Download
+                                </a>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Decision Card -->
+        <div class="glass-card p-4">
+            <h5 class="fw-bold mb-3">
+                <i class="bi bi-question-circle me-2"></i>
+                What would you like to do?
+            </h5>
+
+            <form method="POST" action="{{ url_for('confirm_upload') }}">
+                <input type="hidden" name="filename" value="{{ filename }}">
+
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <button type="submit" name="action" value="store" class="btn btn-success w-100 py-3 shadow">
+                            <i class="bi bi-check-circle-fill me-2"></i>
+                            <strong>Store Anyway</strong>
+                            <p class="mb-0 small mt-1">Upload and encrypt this file</p>
+                        </button>
+                    </div>
+                    <div class="col-md-6">
+                        <button type="submit" name="action" value="skip" class="btn btn-outline-danger w-100 py-3">
+                            <i class="bi bi-x-circle-fill me-2"></i>
+                            <strong>Don't Store</strong>
+                            <p class="mb-0 small mt-1">Cancel this upload</p>
+                        </button>
+                    </div>
+                </div>
+            </form>
+
+            <div class="alert alert-{{ 'danger' if match_type == 'identical' or match_type == 'moderation_flagged' else 'warning' }} border-0 mt-4 mb-0">
+                <small>
+                    <i class="bi bi-lightbulb-fill me-2"></i>
+                    {% if match_type == 'moderation_flagged' %}
+                    <strong>Warning:</strong> Storing this file bypasses the safety filter. If you choose "Don't Store", the file will be deleted permanently.
+                    {% elif match_type == 'identical' %}
+                    <strong>Tip:</strong> This is an exact duplicate. Choosing "Store Anyway" will create a
+                    reference to the existing file, while "Don't Store" will cancel the upload.
+                    {% else %}
+                    <strong>Tip:</strong> If this is truly a duplicate, choosing "Don't Store" will save storage
+                    space and processing time.
+                    {% endif %}
+                </small>
+            </div>
+        </div>
+
+        <!-- Back Link -->
+        <div class="text-center mt-4">
+            <a href="{{ url_for('upload_file') }}" class="text-muted">
+                <i class="bi bi-arrow-left me-1"></i> Upload a different file
+            </a>
+        </div>
+    </div>
+</div>
+</div>
+
+<style>
+    .alert-icon {
+        animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+
+        0%,
+        100% {
+            transform: scale(1);
+        }
+
+        50% {
+            transform: scale(1.05);
+        }
+    }
+
+    .btn {
+        transition: all 0.3s ease;
+    }
+
+    .btn:hover {
+        transform: translateY(-2px);
+    }
+</style>
+{% endblock %}

@@ -1,0 +1,15 @@
+fastapi
+uvicorn
+python-multipart
+torch
+transformers
+sentence-transformers
+openai
+openai-whisper
+scikit-learn
+pandas
+numpy
+pillow
+PyPDF2
+static-ffmpeg
+python-dotenv

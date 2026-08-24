@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: hybrid-ml-dedup
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DEBUG
+        value: False
+      - key: USE_S3
+        value: True
+      - key: PYTHON_VERSION
+        value: 3.11.0
+    autoDeploy: true
