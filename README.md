@@ -30,7 +30,7 @@ It implements end-to-end secure deduplication: standard files are encrypted loca
 | Component | Technology | Description |
 | :--- | :--- | :--- |
 | **Backend** | Python, Flask, Flask-Login, Flask-Bcrypt | Core routing, security, and session management |
-| **Database** | MySQL (with SQLite-like MySQL-Wrapper compatibility) | Schema and metadata storage |
+| **Database** | MongoDB Atlas (Cloud NoSQL DB with atomic indexing) | Document schema and metadata storage |
 | **Machine Learning** | Scikit-Learn (Decision Tree, TF-IDF Vectorizer) | Pre-hashing likelihood prediction and text/PDF similarity |
 | **Speech-to-Text** | Hugging Face / OpenAI Whisper-tiny | Local ASR speech transcription pipeline |
 | **Semantic Embeddings** | Sentence-BERT (`all-MiniLM-L6-v2` / `all-mpnet-base-v2`) | Semantic comparison for transcripts |
@@ -59,7 +59,8 @@ main-project-main/
 ├── sentencebert_service.py    # Sentence-BERT embedding creation for semantic comparisons
 ├── similarity_service.py      # Combines Whisper and SBERT to handle speech similarity matching
 ├── suspicious_upload_detector.py # Tracks and logs anomalous upload patterns (rapid uploads, PoW failures)
-├── mysql_wrapper.py           # Compatibility abstraction layer to query MySQL using SQLite syntax
+├── mongo_wrapper.py           # MongoDB connection and abstraction layer
+├── mysql_wrapper.py           # Backward-compatibility alias layer for mongo_wrapper
 ├── init_db.py                 # Seeds database tables and creates the default admin user
 ├── run.py                     # Wrapper starting script that checks models, database, and runs Flask
 ├── test_aws_credentials.py    # Detailed validation script for testing S3 bucket access & IAM roles
@@ -182,17 +183,17 @@ To protect storage from policy violations, files are analyzed **before** they ar
 
 ## 🐳 Docker Deployment (Recommended)
 
-To deploy the entire stack—including the MySQL database—with a single command:
+To deploy the entire stack with a single command:
 
 1.  **Configure Environment Variables**:
-    Create a `.env` file in the root directory (using `.env.example` as a guide) and populate it with your AWS and OpenAI keys.
+    Create a `.env` file in the root directory (using `.env.example` as a guide) and populate it with your MongoDB URI, AWS, and OpenAI keys.
 2.  **Launch Containers**:
     ```bash
     docker-compose up --build
     ```
 3.  **Access Dashboard**: Open `http://localhost:5000` in your web browser.
 
-The setup scripts in the container automatically create the `cloud_dedup` database, seed tables, compile/train the Decision Tree model, and start the Gunicorn server.
+The setup scripts in the container automatically connect to MongoDB Atlas, seed collections, compile/train the Decision Tree model, and start the Gunicorn server.
 
 ---
 
@@ -200,7 +201,7 @@ The setup scripts in the container automatically create the `cloud_dedup` databa
 
 1.  **Prerequisites**:
     *   Install Python 3.11+
-    *   Install MySQL Server
+    *   MongoDB Atlas Account / Connection String
 2.  **Virtual Environment**:
     ```bash
     python -m venv venv
@@ -213,10 +214,9 @@ The setup scripts in the container automatically create the `cloud_dedup` databa
     ```bash
     pip install -r requirements.txt
     ```
-4.  **Initialize MySQL Database**:
-    *   Start MySQL server and run `CREATE DATABASE cloud_dedup;`
-    *   Update `config.py` database credentials (e.g. Host, User, Password) if different from the default (`root` / `Bhanu@2004`).
-    *   Run database initializer to configure schemas:
+4.  **Initialize MongoDB Atlas Collections**:
+    *   Ensure your `.env` contains your `MONGO_URI` and `MONGO_DB`.
+    *   Run database initializer to configure collections and indexes:
         ```bash
         python init_db.py
         ```

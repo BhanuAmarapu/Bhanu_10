@@ -19,8 +19,15 @@
                         style="width: 80px; height: 80px; background: linear-gradient(135deg, #ff416c 0%, #ff4b2b 100%); border-radius: 50%; display: flex; align-items: center; justify-content: center;">
                         <i class="bi bi-exclamation-triangle-fill text-white" style="font-size: 2.5rem;"></i>
                     </div>
-                    <h3 class="fw-bold mb-2 text-danger">🔴 Identical File Found!</h3>
-                    <p class="text-muted">An exact copy of this file already exists in the system</p>
+                    <h3 class="fw-bold mb-2 text-danger">🔴 100% Identical File Found!</h3>
+                    <p class="text-muted">An exact copy of this file already exists in the system (Hash Match)</p>
+                    {% elif match_type == 'near_duplicate' %}
+                    <div class="alert-icon mx-auto mb-3"
+                        style="width: 80px; height: 80px; background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); border-radius: 50%; display: flex; align-items: center; justify-content: center;">
+                        <i class="bi bi-diagram-3 text-white" style="font-size: 2.5rem;"></i>
+                    </div>
+                    <h3 class="fw-bold mb-2 text-danger">⚠️ Content Similarity Detected ({{ highest_sim_percentage }}% Match)</h3>
+                    <p class="text-muted">Sentence-BERT / DINOv2 AI Engine detected a 60%+ partial similarity match</p>
                     {% else %}
                     <div class="alert-icon mx-auto mb-3"
                         style="width: 80px; height: 80px; background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); border-radius: 50%; display: flex; align-items: center; justify-content: center;">
@@ -38,14 +45,18 @@
                             <i class="bi bi-robot text-primary" style="font-size: 2rem;"></i>
                             <h6 class="mt-2 mb-1 fw-bold">
                                 {% if match_type == 'moderation_flagged' %}
-                                Match Similarity
+                                Moderation Match
+                                {% elif match_type == 'near_duplicate' %}
+                                Similarity Score
                                 {% else %}
                                 ML Confidence
                                 {% endif %}
                             </h6>
-                            <span class="badge bg-{{ 'danger' if ml_confidence == 'High' or match_type == 'moderation_flagged' else 'warning' }} px-3 py-2">
+                            <span class="badge bg-{{ 'danger' if (highest_similarity and highest_similarity >= 0.60) or ml_confidence == 'High' or match_type == 'moderation_flagged' else 'warning' }} px-3 py-2 fs-6">
                                 {% if match_type == 'moderation_flagged' %}
                                 {{ (moderation_result.confidence_score * 100)|round(1) }}% Match
+                                {% elif match_type == 'near_duplicate' %}
+                                {{ highest_sim_percentage }}% Match
                                 {% else %}
                                 {{ ml_confidence }}
                                 {% endif %}

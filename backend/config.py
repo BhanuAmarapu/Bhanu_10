@@ -22,11 +22,9 @@ class Config:
     
     BASE_DIR = os.path.abspath(os.path.dirname(__file__))
     
-    # Database - MySQL
-    MYSQL_HOST = os.getenv('MYSQL_HOST', 'localhost')
-    MYSQL_USER = os.getenv('MYSQL_USER', 'root')
-    MYSQL_PASSWORD = os.getenv('MYSQL_PASSWORD', 'Bhanu@2004')
-    MYSQL_DB = os.getenv('MYSQL_DB', 'cloud_dedup')
+    # Database - MongoDB
+    MONGO_URI = os.getenv('MONGO_URI', 'mongodb+srv://bhanu89190654_db_user:P6s4X0ODr5bhcwlr@cluster0.clqmce7.mongodb.net/?appName=Cluster0')
+    MONGO_DB = os.getenv('MONGO_DB', 'cloud_dedup')
     
     # Upload folders
     UPLOAD_TEMP = os.path.join(BASE_DIR, 'uploads', 'temp_files')

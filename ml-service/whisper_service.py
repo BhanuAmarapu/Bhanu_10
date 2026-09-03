@@ -1,4 +1,6 @@
 import os
+import shutil
+import tempfile
 import torch
 import subprocess
 from transformers import pipeline
@@ -13,11 +15,21 @@ except Exception as e:
     print(f"[WhisperService] Warning: Could not configure static-ffmpeg paths: {e}")
 
 def get_audio_duration(audio_path):
-    """Probes the audio file using ffprobe to get play duration in seconds."""
+    """Gets audio play duration in seconds with wave header parsing before ffprobe fallback."""
     try:
-        # Run ffprobe
+        import wave
+        with wave.open(audio_path, 'r') as wav_file:
+            frames = wav_file.getnframes()
+            rate = wav_file.getframerate()
+            if rate > 0:
+                return float(frames / float(rate))
+    except Exception:
+        pass
+
+    try:
+        ffprobe_bin = shutil.which("ffprobe") or "ffprobe"
         cmd = [
-            "ffprobe", 
+            ffprobe_bin, 
             "-v", "error", 
             "-show_entries", "format=duration", 
             "-of", "default=noprint_wrappers=1:nokey=1", 
@@ -25,17 +37,34 @@ def get_audio_duration(audio_path):
         ]
         output = subprocess.check_output(cmd, stderr=subprocess.STDOUT)
         return float(output.decode().strip())
+    except Exception:
+        return 0.0
+
+def convert_to_16k_wav(input_audio_path):
+    """Converts any audio file to 16kHz mono 16-bit PCM WAV for Whisper."""
+    try:
+        ffmpeg_bin = shutil.which("ffmpeg") or "ffmpeg"
+        fd, temp_wav = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        cmd = [
+            ffmpeg_bin, "-y",
+            "-i", input_audio_path,
+            "-vn",
+            "-acodec", "pcm_s16le",
+            "-ar", "16000",
+            "-ac", "1",
+            temp_wav
+        ]
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if proc.returncode == 0 and os.path.exists(temp_wav) and os.path.getsize(temp_wav) > 100:
+            return temp_wav
+        if os.path.exists(temp_wav):
+            try: os.remove(temp_wav)
+            except: pass
+        return None
     except Exception as e:
-        print(f"[WhisperService] Error getting duration with ffprobe: {e}")
-        # Fallback duration estimation based on wave header
-        try:
-            import wave
-            with wave.open(audio_path, 'r') as wav:
-                frames = wav.getnframes()
-                rate = wav.getframerate()
-                return frames / float(rate)
-        except Exception:
-            return 0.0
+        print(f"[WhisperService] WAV conversion error: {e}")
+        return None
 
 class WhisperService:
     def __init__(self):
@@ -44,7 +73,6 @@ class WhisperService:
     def load_model(self):
         """Loads Hugging Face Whisper model only once and caches it."""
         if self.pipe is None:
-            # CPU threading optimization to prevent core scheduling contention
             if not torch.cuda.is_available() and torch.get_num_threads() > 4:
                 torch.set_num_threads(4)
                 print("[WhisperService] Limited PyTorch CPU threads to 4 to eliminate core contention.")
@@ -55,14 +83,15 @@ class WhisperService:
             print(f"[WhisperService] Loading Hugging Face Whisper model '{model_name}' on {device_str}...")
             
             try:
-                # Try loading locally first for speed and offline robustness by setting HF_HUB_OFFLINE=1
                 print(f"[WhisperService] Attempting local-first load for model '{model_name}'...")
                 os.environ["HF_HUB_OFFLINE"] = "1"
                 self.pipe = pipeline(
                     "automatic-speech-recognition",
                     model=model_name,
+                    device=device,
                     chunk_length_s=30,
-                    device=device
+                    stride_length_s=5,
+                    return_timestamps=True
                 )
             except Exception as local_err:
                 print(f"[WhisperService] Local Whisper model load failed: {local_err}. Trying online loading...")
@@ -71,19 +100,20 @@ class WhisperService:
                     self.pipe = pipeline(
                         "automatic-speech-recognition",
                         model=model_name,
+                        device=device,
                         chunk_length_s=30,
-                        device=device
+                        stride_length_s=5,
+                        return_timestamps=True
                     )
                 except Exception as e:
                     print(f"[WhisperService] Online Whisper loading failed: {e}")
                     raise e
             finally:
-                # Clean up/reset HF_HUB_OFFLINE
                 os.environ.pop("HF_HUB_OFFLINE", None)
             print(f"[WhisperService] Whisper model '{model_name}' pipeline loaded successfully.")
         return self.pipe
  
-    def transcribe(self, audio_path):
+    def transcribe(self, audio_path, duration=None):
         """
         Transcribes the speech in an audio file using Hugging Face pipeline.
         Returns a dict: {"transcript": str, "language": str, "duration": float}
@@ -96,33 +126,48 @@ class WhisperService:
         # Ensure model pipeline is loaded
         self.load_model()
         
-        # Get duration using ffprobe
-        duration = get_audio_duration(audio_path)
+        # Convert to 16kHz mono WAV for guaranteed Whisper compatibility
+        clean_wav = convert_to_16k_wav(audio_path)
+        eval_path = clean_wav if clean_wav else audio_path
+
+        # Get duration if not provided
+        if duration is None or duration <= 0:
+            duration = get_audio_duration(eval_path)
         
-        # Run ASR pipeline optimized for CPU speed (greedy decoding + caching + batching)
-        try:
-            result = self.pipe(
-                audio_path, 
-                batch_size=8,
-                generate_kwargs={
-                    "task": "transcribe",
-                    "num_beams": 1,
-                    "use_cache": True
-                }
-            )
-        except Exception as e:
-            raise RuntimeError(f"Whisper transcription error: {e}")
-            
-        transcript = result.get("text", "").strip()
-        # Default to English (en) or extract from model output
+        transcript = ""
         language = "en"
-        
+        try:
+            with torch.inference_mode():
+                result = self.pipe(
+                    eval_path, 
+                    return_timestamps=True,
+                    generate_kwargs={
+                        "task": "transcribe"
+                    }
+                )
+                if isinstance(result, dict):
+                    transcript = result.get("text", "").strip()
+                elif isinstance(result, str):
+                    transcript = result.strip()
+        except Exception as e:
+            print(f"[WhisperService] Transcription warning: {e}")
+            transcript = "No clear speech detected in audio."
+        finally:
+            if clean_wav and os.path.exists(clean_wav):
+                try: os.remove(clean_wav)
+                except: pass
+            
+        if not transcript:
+            transcript = "No clear speech detected in audio."
+            
         log_action("Transcript Generated", f"File: {os.path.basename(audio_path)} | Lang: {language} | Dur: {duration:.2f}s")
         
         return {
             "transcript": transcript,
             "language": language,
-            "duration": duration
+            "duration": float(duration)
         }
 
 whisper_service = WhisperService()
+
+

@@ -200,6 +200,7 @@
                                 <thead>
                                     <tr>
                                         <th>Name & ID</th>
+                                        <th>Content Similarity & Match</th>
                                         <th>Storage Engine</th>
                                         <th>Size</th>
                                         <th>Fingerprint</th>
@@ -220,6 +221,28 @@
                                                 </div>
                                             </div>
                                         </td>
+                                        <td>
+                                            {% set sim_val = (file.similarity_score|float if file.similarity_score is not none else 0.0) %}
+                                            {% if sim_val >= 0.60 %}
+                                            <span class="badge bg-danger-subtle text-danger border border-danger-subtle rounded-pill px-3 py-2">
+                                                <i class="bi bi-diagram-3-fill me-1"></i>{{ (sim_val * 100)|round(1) }}% Match ({{ file.similarity_match or 'Near-Duplicate' }})
+                                            </span>
+                                            {% elif sim_val > 0.0 %}
+                                            <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle rounded-pill px-3 py-2">
+                                                <i class="bi bi-diagram-3 me-1"></i>{{ (sim_val * 100)|round(1) }}% Match ({{ file.similarity_match or 'Partial Match' }})
+                                            </span>
+                                            {% elif file.is_duplicate %}
+                                            <span class="badge bg-danger-subtle text-danger border border-danger-subtle rounded-pill px-3 py-2">
+                                                <i class="bi bi-files me-1"></i>100% Identical
+                                            </span>
+                                            {% else %}
+                                            <span class="badge bg-success-subtle text-success border border-success-subtle rounded-pill px-3 py-2">
+                                                <i class="bi bi-check-circle-fill me-1"></i>Unique Content (0.0%)
+                                            </span>
+                                            {% endif %}
+                                        </td>
+
+
                                         <td>
                                             {% if file.stored_path.startswith('s3://') %}
                                             <span class="badge bg-info-subtle text-info border border-info-subtle rounded-pill px-3"><i class="bi bi-cloud-fill me-1"></i>S3 Bucket</span>
@@ -301,8 +324,9 @@
                                         </td>
                                         <td>
                                             {% if audio.similarity_score is not none %}
-                                                <span class="badge {% if audio.similarity_score >= 0.6 %}bg-danger text-white{% else %}bg-success{% endif %} rounded-pill px-3">
-                                                    {{ (audio.similarity_score * 100)|round(2) }}%
+                                                {% set a_sim = audio.similarity_score|float %}
+                                                <span class="badge {% if a_sim >= 0.6 %}bg-danger text-white{% else %}bg-success{% endif %} rounded-pill px-3">
+                                                    {{ (a_sim * 100)|round(2) }}%
                                                 </span>
                                             {% else %}
                                                 <span class="badge bg-light text-muted border rounded-pill px-3">N/A</span>
@@ -406,8 +430,9 @@
                                         </td>
                                         <td>
                                             {% if video.similarity_score is not none %}
-                                                <span class="badge {% if video.similarity_score >= 0.6 %}bg-danger text-white{% else %}bg-success{% endif %} rounded-pill px-3">
-                                                    {{ (video.similarity_score * 100)|round(2) }}%
+                                                {% set v_sim = video.similarity_score|float %}
+                                                <span class="badge {% if v_sim >= 0.6 %}bg-danger text-white{% else %}bg-success{% endif %} rounded-pill px-3">
+                                                    {{ (v_sim * 100)|round(2) }}%
                                                 </span>
                                             {% else %}
                                                 <span class="badge bg-light text-muted border rounded-pill px-3">N/A</span>

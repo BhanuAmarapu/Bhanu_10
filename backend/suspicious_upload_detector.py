@@ -6,10 +6,10 @@ Monitors user upload behavior and detects anomalies such as:
 - Repeated Proof of Ownership (PoW) failures
 """
 
-import pymysql
 from datetime import datetime, timedelta
 from config import Config
 from utils import log_action
+from mongo_wrapper import get_mongo_connection
 
 
 class SuspiciousUploadDetector:
@@ -31,9 +31,7 @@ class SuspiciousUploadDetector:
         
     def get_db_connection(self):
         """Get database connection"""
-        from mysql_wrapper import get_mysql_connection
-        conn = get_mysql_connection()
-        return conn
+        return get_mongo_connection()
     
     def track_upload(self, user_id):
         """

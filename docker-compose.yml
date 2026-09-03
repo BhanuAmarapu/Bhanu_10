@@ -1,19 +1,6 @@
 version: '3.8'
 
 services:
-  db:
-    image: mysql:8.0
-    restart: always
-    environment:
-      MYSQL_DATABASE: cloud_dedup
-      MYSQL_ROOT_PASSWORD: rootpassword
-      MYSQL_USER: user
-      MYSQL_PASSWORD: userpassword
-    ports:
-      - "3306:3306"
-    volumes:
-      - mysql_data:/var/lib/mysql
-
   ml-service:
     build:
       context: ./ml-service
@@ -28,20 +15,17 @@ services:
     build:
       context: ./backend
     environment:
-      - MYSQL_HOST=db
-      - MYSQL_USER=user
-      - MYSQL_PASSWORD=userpassword
-      - MYSQL_DB=cloud_dedup
-      - SECRET_KEY=your-secret-key-here
+      - MONGO_URI=${MONGO_URI:-mongodb+srv://bhanu89190654_db_user:P6s4X0ODr5bhcwlr@cluster0.clqmce7.mongodb.net/?appName=Cluster0}
+      - MONGO_DB=${MONGO_DB:-cloud_dedup}
+      - SECRET_KEY=${SECRET_KEY:-secure-data-dedup-key}
       - USE_S3=True
       - AWS_ACCESS_KEY=${AWS_ACCESS_KEY}
       - AWS_SECRET_KEY=${AWS_SECRET_KEY}
-      - AWS_REGION=${AWS_REGION:-us-east-1}
-      - S3_BUCKET_NAME=${S3_BUCKET_NAME}
+      - AWS_REGION=${AWS_REGION:-ap-southeast-2}
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME:-bhanu1011}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ML_SERVICE_URL=http://ml-service:8000
     depends_on:
-      - db
       - ml-service
     volumes:
       - ./backend/uploads:/app/uploads
@@ -54,6 +38,3 @@ services:
       - "5000:80"
     depends_on:
       - backend
-
-volumes:
-  mysql_data:

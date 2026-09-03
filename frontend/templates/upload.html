@@ -307,7 +307,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         const deleteUrl = isActualVideo ? '/video/delete/' + mediaId : '/audio/delete/' + mediaId;
                         isVideo = isActualVideo;
                         
-                        const pollInterval = setInterval(function() {
+                        function checkStatus() {
                             fetch(statusUrl)
                             .then(res => {
                                 if (!res.ok) throw new Error('Polling status request failed');
@@ -406,23 +406,23 @@ document.addEventListener('DOMContentLoaded', function() {
                                     const similarityPercent = (statusData.similarity !== null && statusData.similarity !== undefined) ? (statusData.similarity * 100).toFixed(2) + "%" : "0.00%";
                                     loaderText.innerHTML = `
                                         <div class="card bg-dark border-secondary p-3 mt-3 text-start shadow-sm mx-auto" style="max-width: 400px; color: #e9ecef; border-radius: 12px;">
-                                            <div class="d-flex justify-content-between mb-2">
-                                                <span class="text-white">Highest Semantic Similarity:</span>
-                                                <strong class="text-success">${similarityPercent}</strong>
-                                            </div>
-                                            <div class="small text-muted mb-3 text-center">
-                                                File processed successfully with no conflicts.
-                                            </div>
-                                            <button id="btnProceedDashboard" class="btn btn-success w-100 rounded-pill fw-bold text-white py-2">
-                                                Proceed to Dashboard
-                                            </button>
+                                             <div class="d-flex justify-content-between mb-2">
+                                                 <span class="text-white">Highest Semantic Similarity:</span>
+                                                 <strong class="text-success">${similarityPercent}</strong>
+                                             </div>
+                                             <div class="small text-muted mb-3 text-center">
+                                                 File processed successfully with no conflicts.
+                                             </div>
+                                             <button id="btnProceedDashboard" class="btn btn-success w-100 rounded-pill fw-bold text-white py-2">
+                                                 Proceed to Dashboard
+                                             </button>
                                         </div>
                                     `;
                                     
                                     const proceedBtn = document.getElementById('btnProceedDashboard');
                                     let redirectTimeout = setTimeout(() => {
                                         window.location.href = '/dashboard';
-                                    }, 4000);
+                                    }, 2500);
                                     
                                     if (proceedBtn) {
                                         proceedBtn.addEventListener('click', () => {
@@ -441,7 +441,11 @@ document.addEventListener('DOMContentLoaded', function() {
                             .catch(pollErr => {
                                 console.error('Status check error:', pollErr);
                             });
-                        }, 2000);
+                        }
+
+                        // Fast initial check after 250ms, then poll every 400ms
+                        setTimeout(checkStatus, 250);
+                        const pollInterval = setInterval(checkStatus, 400);
                     } else if (data.status === 'success') {
                         loader.classList.add('d-none');
                         loader.classList.remove('d-flex');

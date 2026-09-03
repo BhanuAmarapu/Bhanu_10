@@ -68,9 +68,9 @@ def decrypt_file(file_path, output_path, key=None):
 
 def log_action(action, details):
     """Append log entry to logs directory."""
-    from mysql_wrapper import get_mysql_connection
+    from mongo_wrapper import get_mongo_connection
     from datetime import datetime
-    conn = get_mysql_connection()
+    conn = get_mongo_connection()
     cursor = conn.cursor()
     cursor.execute("INSERT INTO logs (action, details) VALUES (?, ?)", (action, details))
     conn.commit()

@@ -47,9 +47,12 @@ class MLModel:
             else:
                 self.train(Config.ML_DATASET)
         
-        features = np.array([[file_metadata['file_size'], 
-                             file_metadata['extension_code'], 
-                             file_metadata.get('frequency', 1)]])
+        import pandas as pd
+        features = pd.DataFrame([{
+            'file_size': file_metadata['file_size'], 
+            'extension_code': file_metadata['extension_code'], 
+            'frequency': file_metadata.get('frequency', 1)
+        }])
         prediction = self.model.predict(features)
         return "Duplicate Likely" if prediction[0] == 1 else "Unique"
 

@@ -1,9 +1,17 @@
 import os
 import tempfile
 import json
+import shutil
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
+
+try:
+    import static_ffmpeg
+    static_ffmpeg.add_paths()
+    print("[ML-SERVICE] static_ffmpeg paths initialized.")
+except Exception as e:
+    print(f"[ML-SERVICE] Warning initializing static_ffmpeg: {e}")
 
 from config import Config
 from ml_model import MLModel
@@ -45,7 +53,8 @@ def startup_event():
 
 # Helper to save uploaded file to temp file
 def save_temp_file(uploaded_file: UploadFile) -> str:
-    suffix = os.path.splitext(uploaded_file.filename)[1]
+    fname = uploaded_file.filename or "temp_file"
+    suffix = os.path.splitext(fname)[1] or ".tmp"
     fd, path = tempfile.mkstemp(suffix=suffix)
     os.close(fd)
     with open(path, "wb") as f:
@@ -106,43 +115,166 @@ def detect_similar_content_endpoint(
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
+from concurrent.futures import ThreadPoolExecutor
+
+def extract_audio_snippet_fast(media_path: str, duration_sec: int = 15) -> Optional[str]:
+    """Extracts a short 16kHz mono audio snippet fast for Whisper."""
+    try:
+        import subprocess
+        import uuid
+        ml_data_dir = os.path.join(Config.BASE_DIR, 'ml_data')
+        os.makedirs(ml_data_dir, exist_ok=True)
+        snippet_filename = f"snippet_{uuid.uuid4().hex}.wav"
+        temp_audio_snippet = os.path.join(ml_data_dir, snippet_filename)
+        
+        ffmpeg_bin = shutil.which("ffmpeg") or "ffmpeg"
+        # Fast input-seeking and downsampling to 16kHz 16-bit mono
+        cmd = [
+            ffmpeg_bin, "-y",
+            "-ss", "0",
+            "-t", str(duration_sec),
+            "-i", media_path,
+            "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
+            "-threads", "4",
+            temp_audio_snippet
+        ]
+        process = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if process.returncode == 0 and os.path.exists(temp_audio_snippet) and os.path.getsize(temp_audio_snippet) > 100:
+            return temp_audio_snippet
+        return None
+    except Exception as e:
+        print(f"[ML-SERVICE] Audio snippet extraction error: {e}")
+        return None
+
+def extract_video_frame(video_path: str) -> Optional[str]:
+    """Extracts a representative video frame using fast direct seek."""
+    try:
+        import subprocess
+        fd, temp_img_path = tempfile.mkstemp(suffix=".jpg")
+        os.close(fd)
+        
+        ffmpeg_bin = shutil.which("ffmpeg") or "ffmpeg"
+        # Fast input seek at 1.5s
+        cmd = [
+            ffmpeg_bin, "-y",
+            "-ss", "1.5",
+            "-i", video_path,
+            "-vframes", "1",
+            "-q:v", "2",
+            "-threads", "4",
+            temp_img_path
+        ]
+        process = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if process.returncode != 0 or not os.path.exists(temp_img_path) or os.path.getsize(temp_img_path) == 0:
+            # Fallback to start of video if short
+            cmd = [
+                ffmpeg_bin, "-y",
+                "-i", video_path,
+                "-vframes", "1",
+                "-q:v", "2",
+                "-threads", "4",
+                temp_img_path
+            ]
+            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            
+        if os.path.exists(temp_img_path) and os.path.getsize(temp_img_path) > 0:
+            return temp_img_path
+        return None
+    except Exception as e:
+        print(f"[VideoFrameExtraction] Error: {e}")
+        return None
+
+
 @app.post("/transcribe")
 def transcribe_endpoint(file: UploadFile = File(...)):
     temp_path = save_temp_file(file)
+    temp_snippet = None
     try:
-        # Extract audio snippet using FFmpeg for speed
-        import subprocess
-        import uuid
-        snippet_filename = f"snippet_{uuid.uuid4().hex}.wav"
-        temp_audio_snippet = os.path.join(Config.BASE_DIR, 'ml_data', snippet_filename)
-        
-        snippet_duration = str(Config.AUDIO_SNIPPET_DURATION)
-        cmd = [
-            "ffmpeg", "-y", 
-            "-ss", "0", "-t", snippet_duration, 
-            "-i", temp_path, 
-            "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", 
-            temp_audio_snippet
-        ]
-        
-        print(f"[ML-SERVICE] Extracting {snippet_duration}s snippet: {' '.join(cmd)}")
-        process = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        
-        transcribe_path = temp_audio_snippet if (process.returncode == 0 and os.path.exists(temp_audio_snippet) and os.path.getsize(temp_audio_snippet) > 1000) else temp_path
-        
-        res = whisper_service.transcribe(transcribe_path)
-        
-        # Clean up snippet file
-        if os.path.exists(temp_audio_snippet):
-            try: os.remove(temp_audio_snippet)
-            except: pass
-            
+        from whisper_service import get_audio_duration
+        full_duration = get_audio_duration(temp_path)
+        temp_snippet = extract_audio_snippet_fast(temp_path, duration_sec=min(Config.AUDIO_SNIPPET_DURATION, 20))
+        transcribe_path = temp_snippet if temp_snippet else temp_path
+        res = whisper_service.transcribe(transcribe_path, duration=full_duration)
         return res
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
+        if temp_snippet and os.path.exists(temp_snippet):
+            try: os.remove(temp_snippet)
+            except: pass
         if os.path.exists(temp_path):
-            os.remove(temp_path)
+            try: os.remove(temp_path)
+            except: pass
+
+
+@app.post("/process_video")
+def process_video_endpoint(file: UploadFile = File(...)):
+    """
+    Unified high-performance video processing endpoint.
+    Accepts video once, extracts audio and frame in parallel,
+    runs Whisper, SBERT, and DINOv2, and returns all embeddings in one call.
+    """
+    temp_path = save_temp_file(file)
+    try:
+        # Extract audio snippet and video frame concurrently
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            future_audio = executor.submit(extract_audio_snippet_fast, temp_path, min(Config.AUDIO_SNIPPET_DURATION, 15))
+            future_frame = executor.submit(extract_video_frame, temp_path)
+            
+            audio_snippet_path = future_audio.result()
+            frame_img_path = future_frame.result()
+
+        transcript = ""
+        language = "en"
+        duration = 0.0
+        embedding = []
+        dino_embedding = []
+
+        # 1. Transcribe audio and generate SBERT embedding
+        if audio_snippet_path:
+            try:
+                res = whisper_service.transcribe(audio_snippet_path)
+                transcript = res.get("transcript", "").strip()
+                language = res.get("language", "en")
+                duration = res.get("duration", 0.0)
+                if transcript:
+                    embedding = sentencebert_service.generate_embedding(transcript)
+            except Exception as w_err:
+                print(f"[ML-SERVICE] Video audio transcription warning: {w_err}")
+            finally:
+                if os.path.exists(audio_snippet_path):
+                    try: os.remove(audio_snippet_path)
+                    except: pass
+
+        # 2. Compute DINOv2 visual embedding for frame
+        if frame_img_path:
+            try:
+                tensor = similarity_detector.compute_dinov2_embedding(frame_img_path)
+                if tensor is not None:
+                    emb = tensor.tolist()
+                    if emb and isinstance(emb[0], list):
+                        emb = emb[0]
+                    dino_embedding = emb
+            except Exception as d_err:
+                print(f"[ML-SERVICE] Video frame DINOv2 warning: {d_err}")
+            finally:
+                if os.path.exists(frame_img_path):
+                    try: os.remove(frame_img_path)
+                    except: pass
+
+        return {
+            "transcript": transcript or "No speech detected in video track.",
+            "language": language,
+            "duration": duration,
+            "embedding": embedding,
+            "dino_embedding": dino_embedding
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if os.path.exists(temp_path):
+            try: os.remove(temp_path)
+            except: pass
 
 class EmbeddingRequest(BaseModel):
     text: str
@@ -211,71 +343,13 @@ def add_dino_cache_endpoint(file: UploadFile = File(...), file_id: int = Form(..
 def extract_text_endpoint(file: UploadFile = File(...), filename: str = Form(...)):
     temp_path = save_temp_file(file)
     try:
-        text = similarity_detector.read_file_content(temp_path)
+        text = similarity_detector.read_file_content(temp_path, filename=filename)
         return {"text": text}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
-
-def extract_video_frame(video_path):
-    """Extracts the middle frame of a video using FFmpeg/ffprobe and saves it as a temp JPEG."""
-    try:
-        import subprocess
-        # 1. Get video duration using ffprobe
-        duration = 0.0
-        try:
-            cmd = [
-                "ffprobe", 
-                "-v", "error", 
-                "-show_entries", "format=duration", 
-                "-of", "default=noprint_wrappers=1:nokey=1", 
-                video_path
-            ]
-            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT)
-            duration = float(output.decode().strip())
-        except Exception as e:
-            print(f"[VideoFrameExtraction] ffprobe duration check failed: {e}")
-            
-        # 2. Determine seek time (middle of the video, fallback to 2 seconds or 0 if very short)
-        seek_time = duration / 2.0 if duration > 0 else 2.0
-        
-        fd, temp_img_path = tempfile.mkstemp(suffix=".jpg")
-        os.close(fd)
-        
-        # 3. FFmpeg command to extract 1 frame at seek_time
-        if duration > 0 and seek_time > duration:
-            seek_time = duration / 2.0
-            
-        cmd = [
-            "ffmpeg", "-y",
-            "-ss", str(seek_time),
-            "-i", video_path,
-            "-vframes", "1",
-            "-q:v", "2",
-            temp_img_path
-        ]
-        
-        print(f"[VideoFrameExtraction] Extracting frame at {seek_time}s using FFmpeg...")
-        process = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if process.returncode != 0:
-            print(f"[VideoFrameExtraction] FFmpeg ss-seek failed (code {process.returncode}). Retrying from start...")
-            cmd = [
-                "ffmpeg", "-y",
-                "-i", video_path,
-                "-vframes", "1",
-                "-q:v", "2",
-                temp_img_path
-            ]
-            process = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            
-        if process.returncode == 0 and os.path.exists(temp_img_path) and os.path.getsize(temp_img_path) > 0:
-            return temp_img_path
-        return None
-    except Exception as e:
-        print(f"[VideoFrameExtraction] General error: {e}")
-        return None
 
 @app.post("/process_video_visual")
 def process_video_visual_endpoint(file: UploadFile = File(...)):
@@ -300,3 +374,16 @@ def process_video_visual_endpoint(file: UploadFile = File(...)):
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
+
+class CompareTextsRequest(BaseModel):
+    text1: str
+    text2: str
+
+@app.post("/compare_two_texts")
+def compare_two_texts_endpoint(req: CompareTextsRequest):
+    try:
+        score = similarity_detector.compute_text_similarity(req.text1, req.text2)
+        return {"similarity": score}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+

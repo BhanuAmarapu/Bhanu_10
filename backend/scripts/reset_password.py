@@ -1,21 +1,26 @@
 """
-Reset password for an existing user (MySQL version)
+Reset password for an existing user (MongoDB version)
 """
-from mysql_wrapper import get_mysql_connection
 import os
 import sys
+
+backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if backend_dir not in sys.path:
+    sys.path.insert(0, backend_dir)
+
+from mongo_wrapper import get_mongo_connection
 
 def reset_password():
     """Reset password for an existing user"""
     print("=" * 60)
-    print("MySQL Password Reset Tool")
+    print("MongoDB Password Reset Tool")
     print("=" * 60)
     
     # Connect to database
     try:
-        conn = get_mysql_connection()
+        conn = get_mongo_connection()
     except Exception as e:
-        print(f"\n[ERROR] Could not connect to database: {e}")
+        print(f"\n[ERROR] Could not connect to MongoDB Atlas database: {e}")
         return
     
     # Show existing users
@@ -55,7 +60,7 @@ def reset_password():
     conn.close()
     
     print("\n" + "=" * 60)
-    print(f"[SUCCESS] Password updated successfully in MySQL!")
+    print(f"[SUCCESS] Password updated successfully in MongoDB Atlas!")
     print(f"   Username: {username}")
     print(f"   New Password: {new_password}")
     print("=" * 60)

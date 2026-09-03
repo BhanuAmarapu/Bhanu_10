@@ -1,8 +1,8 @@
 import os
-import pymysql
 import hashlib
 from config import Config
 from utils import log_action, get_file_hash
+from mongo_wrapper import get_mongo_connection
 
 class Auditor:
     def __init__(self):
@@ -10,8 +10,7 @@ class Auditor:
 
     def audit_file(self, file_id):
         """Perform integrity audit on a file."""
-        from mysql_wrapper import get_mysql_connection
-        conn = get_mysql_connection()
+        conn = get_mongo_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT file_name, file_hash, stored_path FROM files WHERE id = ?", (file_id,))
         file_data = cursor.fetchone()
@@ -20,7 +19,9 @@ class Auditor:
             conn.close()
             return False, "File not found in database."
 
-        file_name, original_hash, stored_path = file_data
+        file_name = file_data['file_name']
+        original_hash = file_data['file_hash']
+        stored_path = file_data['stored_path']
         
         status = "Success"
         message = f"Integrity verified for {file_name}"
@@ -78,8 +79,7 @@ class Auditor:
         return sha256.hexdigest()
 
     def get_audit_logs(self):
-        from mysql_wrapper import get_mysql_connection
-        conn = get_mysql_connection()
+        conn = get_mongo_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM audits ORDER BY timestamp DESC")
         logs = cursor.fetchall()

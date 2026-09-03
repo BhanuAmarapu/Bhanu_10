@@ -90,6 +90,18 @@ class MLClient:
         except Exception as e:
             raise RuntimeError(f"ML service audio transcription failed: {e}")
 
+    def process_video(self, video_path):
+        """Call FastAPI unified video processing endpoint (transcription + SBERT + DINOv2 in parallel)."""
+        try:
+            filename = os.path.basename(video_path)
+            with open(video_path, 'rb') as f:
+                files = {'file': (filename, f)}
+                resp = requests.post(f"{self.url}/process_video", files=files, timeout=300)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            raise RuntimeError(f"ML service video processing failed: {e}")
+
     def generate_embedding(self, text):
         """Call FastAPI SBERT embedding generation."""
         try:
@@ -102,13 +114,31 @@ class MLClient:
     def find_highest_similarity(self, new_embedding, stored_records, exclude_id=None, table_name="audio_records", new_transcript=None, new_dino_embedding=None):
         """Call FastAPI similarity calculator."""
         try:
+            clean_records = []
+            for r in stored_records:
+                if r is None:
+                    continue
+                try:
+                    clean_records.append({
+                        "id": r["id"],
+                        "original_filename": r["original_filename"],
+                        "transcript": r["transcript"] if "transcript" in r else None,
+                        "embedding": r["embedding"] if "embedding" in r else None,
+                        "dino_embedding": r["dino_embedding"] if "dino_embedding" in r else None,
+                        "language": r["language"] if "language" in r else "en",
+                        "duration": float(r["duration"]) if "duration" in r and r["duration"] is not None else 0.0,
+                        "s3_object_key": r["s3_object_key"] if "s3_object_key" in r else ""
+                    })
+                except Exception:
+                    clean_records.append(dict(r))
+
             payload = {
-                "new_embedding": new_embedding,
-                "stored_records": stored_records,
+                "new_embedding": list(new_embedding) if new_embedding is not None else [],
+                "stored_records": clean_records,
                 "exclude_id": exclude_id,
                 "table_name": table_name,
-                "new_transcript": new_transcript,
-                "new_dino_embedding": new_dino_embedding
+                "new_transcript": str(new_transcript) if new_transcript else None,
+                "new_dino_embedding": list(new_dino_embedding) if new_dino_embedding is not None else None
             }
             resp = requests.post(f"{self.url}/find_highest_similarity", json=payload, timeout=60)
             resp.raise_for_status()
@@ -116,6 +146,7 @@ class MLClient:
         except Exception as e:
             print(f"[MLClient] Similarity calculation error: {e}")
             return {"similarity": 0.0, "matched_record": None, "match_type": "transcript"}
+
 
     def compute_dinov2_embedding(self, file_path):
         """Call FastAPI DINOv2 visual embedding computation."""
@@ -147,10 +178,11 @@ class MLClient:
             print(f"[MLClient] Add DINO cache error: {e}")
             return False
 
-    def read_file_content(self, file_path):
+    def read_file_content(self, file_path, filename=None):
         """Call FastAPI text/image description extractor."""
         try:
-            filename = os.path.basename(file_path)
+            if not filename:
+                filename = os.path.basename(file_path)
             with open(file_path, 'rb') as f:
                 files = {'file': (filename, f)}
                 data = {'filename': filename}
@@ -161,17 +193,30 @@ class MLClient:
             print(f"[MLClient] Extract text error: {e}")
             return None
 
+    def compare_two_texts(self, text1, text2):
+        """Call FastAPI text comparison endpoint."""
+        try:
+            resp = requests.post(f"{self.url}/compare_two_texts", json={"text1": text1, "text2": text2}, timeout=30)
+            resp.raise_for_status()
+            return resp.json()["similarity"]
+        except Exception as e:
+            print(f"[MLClient] Compare texts error: {e}")
+            return 0.0
+
     def is_text_file(self, filename):
-        """Check if file is a text file based on extension (matches content_similarity.py)."""
+        """True for non-image, non-audio, non-video files that can be processed as content."""
         ext = filename.split('.')[-1].lower() if '.' in filename else ''
-        return ext in {
-            'txt', 'md', 'py', 'js', 'java', 'cpp', 'c', 'h', 
-            'html', 'css', 'json', 'xml', 'csv', 'log', 'sql', 'pdf'
-        }
+        media_exts = {'mp3', 'wav', 'aac', 'flac', 'm4a', 'mpeg', 'mpg', 'ogg', 'opus', 'amr', 'wma', 'mpga', 'mp2',
+                      'mp4', 'avi', 'mov', 'mkv', 'webm', 'wmv', 'flv'}
+        image_exts = {'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'tiff', 'svg', 'ico', 'avif', 'heic'}
+        if ext in media_exts or ext in image_exts:
+            return False
+        return True
 
     def is_image_file(self, filename):
-        """Check if file is an image file based on extension (matches content_similarity.py)."""
+        """Check if file is an image file based on extension."""
         ext = filename.split('.')[-1].lower() if '.' in filename else ''
-        return ext in {'png', 'jpg', 'jpeg', 'webp', 'gif'}
+        return ext in {'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'tiff', 'svg', 'ico', 'avif', 'heic'}
 
 ml_client = MLClient()
+

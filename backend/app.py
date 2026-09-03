@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, send_from_directory
 import os
-import pymysql
+from mongo_wrapper import get_mongo_connection, IntegrityError
 from werkzeug.utils import secure_filename
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from config import Config
@@ -9,6 +9,14 @@ from auditing import Auditor
 from utils import log_action
 from suspicious_upload_detector import SuspiciousUploadDetector
 from services.ml_client import ml_client
+
+try:
+    import static_ffmpeg
+    static_ffmpeg.add_paths()
+    print("[INIT] static_ffmpeg paths initialized in backend.")
+except Exception as e:
+    print(f"[INIT] Warning initializing static_ffmpeg in backend: {e}")
+
 
 # Extension mapping helper (originally from ml_model.py)
 EXT_MAP = {
@@ -38,9 +46,8 @@ print("[INIT] ML tasks are routed to the ML Service via HTTP client.")
 
 # Auto-initialize video records table on startup and migrate audio status column
 try:
-    print("[INIT] Checking/initializing video_records database table...")
-    from mysql_wrapper import get_mysql_connection
-    conn_init = get_mysql_connection()
+    print("[INIT] Checking/initializing MongoDB database collections...")
+    conn_init = get_mongo_connection()
     conn_init.execute("""
         CREATE TABLE IF NOT EXISTS video_records (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -141,8 +148,173 @@ try:
 except Exception as e:
     print(f"[INIT] Warning: Could not run startup database updates: {e}")
 
+def get_db_connection():
+    from mongo_wrapper import get_mongo_connection
+    return get_mongo_connection()
 
+def auto_backfill_database_contents():
+    """
+    Scans files collection on startup for any records missing content_text or dino_embedding,
+    decrypts them from local storage or S3, extracts content via ML service, and updates the database.
+    """
+    try:
+        from utils import decrypt_file, download_from_s3
+        conn = get_db_connection()
+        all_files = conn.execute("SELECT id, file_name, stored_path, content_text, dino_embedding FROM files").fetchall()
+        missing_files = [f for f in all_files if not f.get('content_text') and not f.get('dino_embedding')]
+        
+        if missing_files:
+            print(f"[STARTUP BACKFILL] Found {len(missing_files)} stored files missing content extraction. Starting backfill...")
 
+            for row in missing_files:
+                fid = row['id']
+                fname = row['file_name']
+                spath = row['stored_path']
+                print(f"[STARTUP BACKFILL] Processing file ID {fid} ({fname})...")
+                
+                temp_encrypted = None
+                temp_decrypted = os.path.join(Config.UPLOAD_TEMP, f"backfill_dec_{fid}_{fname}")
+                try:
+                    if spath.startswith("s3://"):
+                        s3_key = spath.replace(f"s3://{Config.S3_BUCKET_NAME}/", "").split("/")[-1]
+                        temp_encrypted = os.path.join(Config.UPLOAD_TEMP, f"backfill_enc_{fid}_{s3_key}")
+                        if download_from_s3(s3_key, temp_encrypted):
+                            decrypt_file(temp_encrypted, temp_decrypted)
+                    elif os.path.exists(spath):
+                        decrypt_file(spath, temp_decrypted)
+                        
+                    if os.path.exists(temp_decrypted):
+                        c_text = ml_client.read_file_content(temp_decrypted, filename=fname)
+                        dino_emb_str = None
+                        if ml_client.is_image_file(fname):
+                            dino_wrap = ml_client.compute_dinov2_embedding(temp_decrypted)
+                            if dino_wrap:
+                                import json
+                                dino_emb_str = json.dumps(dino_wrap.tolist())
+                                ml_client.add_dino_cache(fid, temp_decrypted)
+                                
+                        if c_text or dino_emb_str:
+                            conn.execute("""
+                                UPDATE files 
+                                SET content_text = ?, dino_embedding = ? 
+                                WHERE id = ?
+                            """, (c_text, dino_emb_str, fid))
+                            conn.execute("""
+                                UPDATE uploads 
+                                SET content_text = ? 
+                                WHERE file_id = ?
+                            """, (c_text, fid))
+                            conn.commit()
+                            print(f"[STARTUP BACKFILL] Successfully backfilled content for ID {fid} ({fname})")
+                except Exception as b_err:
+                    print(f"[STARTUP BACKFILL] Warning: Backfill failed for ID {fid} ({fname}): {b_err}")
+                finally:
+                    if temp_encrypted and os.path.exists(temp_encrypted):
+                        try: os.remove(temp_encrypted)
+                        except: pass
+                    if os.path.exists(temp_decrypted):
+                        try: os.remove(temp_decrypted)
+                        except: pass
+        else:
+            print("[STARTUP BACKFILL] All files in database already have content text extracted.")
+            
+        # 2. Backfill audio_records missing transcripts or failed/stuck
+        all_audios = conn.execute("SELECT * FROM audio_records").fetchall()
+        for a in all_audios:
+            t = a.get('transcript') or ''
+            st = a.get('status') or ''
+            if not t or t.startswith("Processing") or t.startswith("Processing failed") or st in ('failed', 'processing'):
+                aid = a['id']
+                fname = a['original_filename']
+                s3_key = a.get('s3_object_key') or a.get('uuid_filename')
+                print(f"[MEDIA BACKFILL] Reprocessing audio ID {aid} ({fname})...")
+                
+                temp_audio_path = os.path.join(Config.UPLOAD_TEMP, f"backfill_audio_{aid}_{fname}")
+                local_stored = os.path.join(Config.UPLOAD_STORED, s3_key)
+                try:
+                    found = False
+                    if os.path.exists(local_stored):
+                        import shutil
+                        shutil.copy2(local_stored, temp_audio_path)
+                        found = True
+                    elif Config.USE_S3 and download_from_s3(s3_key, temp_audio_path):
+                        found = True
+                        
+                    if found and os.path.exists(temp_audio_path):
+                        res = ml_client.transcribe(temp_audio_path)
+                        transcript = res.get("transcript", "")
+                        lang = res.get("language", "en")
+                        dur = float(res.get("duration", 0.0))
+                        emb = ml_client.generate_embedding(transcript) if transcript else []
+                        
+                        import json
+                        conn.execute("""
+                            UPDATE audio_records 
+                            SET transcript = ?, embedding = ?, language = ?, duration = ?, status = 'completed'
+                            WHERE id = ?
+                        """, (transcript, json.dumps(emb), lang, dur, aid))
+                        conn.commit()
+                        print(f"[MEDIA BACKFILL] Successfully backfilled transcript for audio ID {aid} ({fname}): {transcript[:60]}")
+                except Exception as a_err:
+                    print(f"[MEDIA BACKFILL] Audio backfill error for ID {aid}: {a_err}")
+                finally:
+                    if os.path.exists(temp_audio_path):
+                        try: os.remove(temp_audio_path)
+                        except: pass
+
+        # 3. Backfill video_records missing transcripts/embeddings
+        all_videos = conn.execute("SELECT * FROM video_records").fetchall()
+        for v in all_videos:
+            t = v.get('transcript') or ''
+            st = v.get('status') or ''
+            d_emb = v.get('dino_embedding') or '[]'
+            if not t or t.startswith("Processing") or t.startswith("Processing failed") or st in ('failed', 'processing') or d_emb in ('[]', 'null', None):
+                vid = v['id']
+                fname = v['original_filename']
+                s3_key = v.get('s3_object_key') or v.get('uuid_filename')
+                print(f"[MEDIA BACKFILL] Reprocessing video ID {vid} ({fname})...")
+                
+                temp_video_path = os.path.join(Config.UPLOAD_TEMP, f"backfill_video_{vid}_{fname}")
+                local_stored = os.path.join(Config.UPLOAD_STORED, s3_key)
+                try:
+                    found = False
+                    if os.path.exists(local_stored):
+                        import shutil
+                        shutil.copy2(local_stored, temp_video_path)
+                        found = True
+                    elif Config.USE_S3 and download_from_s3(s3_key, temp_video_path):
+                        found = True
+                        
+                    if found and os.path.exists(temp_video_path):
+                        video_res = ml_client.process_video(temp_video_path)
+                        transcript = video_res.get("transcript", "")
+                        lang = video_res.get("language", "en")
+                        dur = float(video_res.get("duration", 0.0))
+                        emb = video_res.get("embedding", [])
+                        dino_emb = video_res.get("dino_embedding", [])
+                        
+                        import json
+                        conn.execute("""
+                            UPDATE video_records 
+                            SET transcript = ?, embedding = ?, dino_embedding = ?, language = ?, duration = ?, status = 'completed'
+                            WHERE id = ?
+                        """, (transcript, json.dumps(emb), json.dumps(dino_emb), lang, dur, vid))
+                        conn.commit()
+                        print(f"[MEDIA BACKFILL] Successfully backfilled video ID {vid} ({fname})")
+                except Exception as v_err:
+                    print(f"[MEDIA BACKFILL] Video backfill error for ID {vid}: {v_err}")
+                finally:
+                    if os.path.exists(temp_video_path):
+                        try: os.remove(temp_video_path)
+                        except: pass
+
+        conn.close()
+    except Exception as e:
+        print(f"[STARTUP BACKFILL] Error during startup content backfill: {e}")
+
+# Run backfill on startup in a thread
+import threading
+threading.Thread(target=auto_backfill_database_contents, daemon=True).start()
 
 login_manager = LoginManager()
 login_manager.init_app(app)
@@ -163,9 +335,6 @@ def load_user(user_id):
         return User(user['id'], user['username'], user['role'])
     return None
 
-def get_db_connection():
-    from mysql_wrapper import get_mysql_connection
-    return get_mysql_connection()
 
 @app.route('/')
 def index():
@@ -199,7 +368,7 @@ def register():
             conn.commit()
             flash('Registration successful. Please login.')
             return redirect(url_for('login'))
-        except pymysql.err.IntegrityError:
+        except IntegrityError:
             flash('Username already exists')
         conn.close()
     return render_template('register.html')
@@ -288,17 +457,17 @@ def upload_file():
                         try:
                             # 1. Convert speech into text using Whisper (via ML Service)
                             transcription_result = ml_client.transcribe(t_path)
-                            transcript = transcription_result["transcript"]
-                            language = transcription_result["language"]
-                            duration = transcription_result["duration"]
+                            transcript = transcription_result.get("transcript", "")
+                            language = transcription_result.get("language", "en")
+                            duration = float(transcription_result.get("duration", 0.0))
                             
                             # 2. Generate semantic embeddings using Sentence-BERT (via ML Service)
-                            embedding = ml_client.generate_embedding(transcript)
+                            embedding = ml_client.generate_embedding(transcript) if transcript else []
                             
                             # 3. Fetch stored records from database for similarity check
                             conn_sim = get_db_connection()
                             cursor_sim = conn_sim.execute(
-                                "SELECT id, original_filename, transcript, embedding, NULL as dino_embedding, language, duration, s3_object_key FROM audio_records WHERE id != ? AND status = 'completed'",
+                                "SELECT id, original_filename, transcript, embedding, NULL as dino_embedding, language, duration, s3_object_key FROM audio_records WHERE id != ?",
                                 (rec_id,)
                             )
                             stored_records = []
@@ -316,7 +485,7 @@ def upload_file():
                             
                             # Fetch cross-media records from video_records
                             cursor_vid = conn_sim.execute(
-                                "SELECT id, original_filename, transcript, embedding, NULL as dino_embedding, language, duration, s3_object_key FROM video_records WHERE status = 'completed'"
+                                "SELECT id, original_filename, transcript, embedding, NULL as dino_embedding, language, duration, s3_object_key FROM video_records"
                             )
                             for r in cursor_vid.fetchall():
                                 stored_records.append({
@@ -339,15 +508,15 @@ def upload_file():
                                 table_name="audio_records", 
                                 new_transcript=transcript
                             )
-                            similarity_score = similarity_result["similarity"]
+                            similarity_score = float(similarity_result.get("similarity", 0.0))
                             
                             # If similarity is >= 60%, status is pending_confirmation, otherwise completed
                             status = "pending_confirmation" if similarity_score >= 0.60 else "completed"
                             
                             # Retrieve matches
                             matched_record = similarity_result.get("matched_record")
-                            matched_filename = matched_record["original_filename"] if matched_record else None
-                            matched_transcript = matched_record["transcript"] if matched_record else None
+                            matched_filename = similarity_result.get("matched_filename") or (matched_record["original_filename"] if matched_record else None)
+                            matched_transcript = similarity_result.get("matched_transcript") or (matched_record["transcript"] if matched_record else None)
                             
                             # 4. If status is completed (similarity < 60%), upload to S3 now and delete local file
                             if status == "completed":
@@ -392,7 +561,7 @@ def upload_file():
                             ))
                             conn_thread.commit()
                             conn_thread.close()
-                            print(f"[AsyncAudio] Processed and finalized {orig_name} successfully with status {status}.")
+                            print(f"[AsyncAudio] Processed and finalized {orig_name} successfully with similarity {similarity_score:.1%} and status {status}.")
                             
                         except Exception as thread_err:
                             print(f"[AsyncAudio] Error processing audio {orig_name}: {thread_err}")
@@ -494,83 +663,73 @@ def upload_file():
                             matched_transcript = None
                             
                             try:
-                                print(f"[AsyncVideo] Running Whisper transcription via ML Service...")
-                                transcription_result = ml_client.transcribe(t_path)
-                                transcript = transcription_result["transcript"]
-                                language = transcription_result["language"]
-                                duration = transcription_result["duration"]
-                                
-                                if transcript.strip():
-                                    print(f"[AsyncVideo] Generating SBERT embedding for video transcript...")
-                                    embedding = ml_client.generate_embedding(transcript)
-                            except Exception as whisper_err:
-                                print(f"[AsyncVideo] Audio transcription failed: {whisper_err}")
-                                
-                            # 4. Extract video frame and compute DINOv2 embedding via ML Service
-                            try:
-                                print(f"[AsyncVideo] Computing DINOv2 visual embedding for video middle frame via ML Service...")
-                                dino_embedding = ml_client.process_video_visual(t_path)
-                            except Exception as dino_err:
-                                print(f"[AsyncVideo] DINOv2 embedding failed: {dino_err}")
+                                print(f"[AsyncVideo] Processing video (speech + vision) in unified pipeline...")
+                                video_res = ml_client.process_video(t_path)
+                                transcript = video_res.get("transcript", "No audio track detected or extraction failed.")
+                                language = video_res.get("language", "en")
+                                duration = float(video_res.get("duration", 0.0))
+                                embedding = video_res.get("embedding", [])
+                                dino_embedding = video_res.get("dino_embedding", [])
+                            except Exception as video_err:
+                                print(f"[AsyncVideo] Video unified processing failed: {video_err}")
 
                             # 5. Compare embedding and dino embedding against other stored video records
-                            if embedding or dino_embedding:
-                                conn_sim = get_db_connection()
-                                cursor_sim = conn_sim.execute(
-                                    "SELECT id, original_filename, transcript, embedding, dino_embedding, language, duration, s3_object_key FROM video_records WHERE id != ? AND status = 'completed'",
-                                    (rec_id,)
-                                )
-                                stored_records = []
-                                for r in cursor_sim.fetchall():
-                                    stored_records.append({
-                                        'id': r['id'],
-                                        'original_filename': r['original_filename'],
-                                        'transcript': r['transcript'],
-                                        'embedding': r['embedding'],
-                                        'dino_embedding': r['dino_embedding'],
-                                        'language': r['language'],
-                                        'duration': r['duration'],
-                                        's3_object_key': r['s3_object_key']
-                                    })
-                                
-                                # Fetch cross-media from audio_records
-                                cursor_aud = conn_sim.execute(
-                                    "SELECT id, original_filename, transcript, embedding, NULL as dino_embedding, language, duration, s3_object_key FROM audio_records WHERE status = 'completed'"
-                                )
-                                for r in cursor_aud.fetchall():
-                                    stored_records.append({
-                                        'id': r['id'],
-                                        'original_filename': r['original_filename'],
-                                        'transcript': r['transcript'],
-                                        'embedding': r['embedding'],
-                                        'dino_embedding': None,
-                                        'language': r['language'],
-                                        'duration': r['duration'],
-                                        's3_object_key': r['s3_object_key']
-                                    })
-                                conn_sim.close()
+                            conn_sim = get_db_connection()
+                            cursor_sim = conn_sim.execute(
+                                "SELECT id, original_filename, transcript, embedding, dino_embedding, language, duration, s3_object_key FROM video_records WHERE id != ?",
+                                (rec_id,)
+                            )
+                            stored_records = []
+                            for r in cursor_sim.fetchall():
+                                stored_records.append({
+                                    'id': r['id'],
+                                    'original_filename': r['original_filename'],
+                                    'transcript': r['transcript'],
+                                    'embedding': r['embedding'],
+                                    'dino_embedding': r['dino_embedding'],
+                                    'language': r['language'],
+                                    'duration': r['duration'],
+                                    's3_object_key': r['s3_object_key']
+                                })
+                            
+                            # Fetch cross-media from audio_records
+                            cursor_aud = conn_sim.execute(
+                                "SELECT id, original_filename, transcript, embedding, NULL as dino_embedding, language, duration, s3_object_key FROM audio_records"
+                            )
+                            for r in cursor_aud.fetchall():
+                                stored_records.append({
+                                    'id': r['id'],
+                                    'original_filename': r['original_filename'],
+                                    'transcript': r['transcript'],
+                                    'embedding': r['embedding'],
+                                    'dino_embedding': None,
+                                    'language': r['language'],
+                                    'duration': r['duration'],
+                                    's3_object_key': r['s3_object_key']
+                                })
+                            conn_sim.close()
 
-                                text_emb_for_sim = embedding if embedding else [0.0] * 384
-                                similarity_result = ml_client.find_highest_similarity(
-                                    text_emb_for_sim, 
-                                    stored_records,
-                                    exclude_id=rec_id, 
-                                    table_name="video_records",
-                                    new_transcript=transcript if embedding else None,
-                                    new_dino_embedding=dino_embedding if dino_embedding else None
-                                )
-                                similarity_score = similarity_result["similarity"]
-                                match_type = similarity_result.get("match_type", "transcript")
-                                
-                                # Any visual or transcript similarity >= 60% (0.60) triggers a duplicate warning
-                                is_duplicate = (similarity_score >= 0.60)
+                            text_emb_for_sim = embedding if embedding else [0.0] * 384
+                            similarity_result = ml_client.find_highest_similarity(
+                                text_emb_for_sim, 
+                                stored_records, 
+                                exclude_id=rec_id, 
+                                table_name="video_records",
+                                new_transcript=transcript if embedding else None,
+                                new_dino_embedding=dino_embedding if dino_embedding else None
+                            )
+                            similarity_score = float(similarity_result.get("similarity", 0.0))
+                            match_type = similarity_result.get("match_type", "transcript")
+                            
+                            # Any visual or transcript similarity >= 60% (0.60) triggers a duplicate warning
+                            is_duplicate = (similarity_score >= 0.60)
                                     
-                                status = "pending_confirmation" if is_duplicate else "completed"
-                                
-                                # Retrieve matched record
-                                matched_record = similarity_result.get("matched_record")
-                                matched_filename = matched_record["original_filename"] if matched_record else None
-                                matched_transcript = matched_record["transcript"] if matched_record else None
+                            status = "pending_confirmation" if is_duplicate else "completed"
+                            
+                            # Retrieve matched record
+                            matched_record = similarity_result.get("matched_record")
+                            matched_filename = similarity_result.get("matched_filename") or (matched_record["original_filename"] if matched_record else None)
+                            matched_transcript = similarity_result.get("matched_transcript") or (matched_record["transcript"] if matched_record else None)
                                         
                             # 6. If status is completed (no duplicates found), upload to S3 now and delete local file
                             if status == "completed":
@@ -618,7 +777,7 @@ def upload_file():
                             ))
                             conn_thread.commit()
                             conn_thread.close()
-                            print(f"[AsyncVideo] Processed and finalized video {orig_name} successfully with status {status}.")
+                            print(f"[AsyncVideo] Processed and finalized video {orig_name} successfully with similarity {similarity_score:.1%} and status {status}.")
                             
                         except Exception as thread_err:
                             print(f"[AsyncVideo] Error processing video {orig_name}: {thread_err}")
@@ -660,7 +819,39 @@ def upload_file():
                             pass
                     return jsonify({"error": f"Video processing failed: {str(e)}"}), 500
 
-            # STEP 0: AI CONTENT MODERATION CHECK (BEFORE ANY PROCESSING)
+            # FAST-PATH 1: Compute cryptographic hash and check for IDENTICAL files immediately
+            from utils import get_file_hash
+            file_hash = get_file_hash(temp_path)
+            file_size = os.path.getsize(temp_path)
+            ext_code = get_ext_code(filename)
+            
+            conn = get_db_connection()
+            identical_files = conn.execute("""
+                SELECT id, file_name, file_size, file_hash, upload_timestamp, stored_path 
+                FROM files 
+                WHERE file_hash = ?
+                ORDER BY upload_timestamp DESC
+            """, (file_hash,)).fetchall()
+            
+            # If an exact identical file already exists in storage, fast-path confirm without heavy ML overhead (<5ms)
+            if identical_files:
+                conn.close()
+                print(f"[FAST-PATH] Identical file match found for {filename} (Hash: {file_hash[:12]}). Bypassing ML analysis.")
+                return render_template('upload_confirmation.html',
+                                     filename=filename,
+                                     temp_path=temp_path,
+                                     file_size=file_size,
+                                     file_hash=file_hash,
+                                     prediction="Duplicate Likely",
+                                     identical_files=identical_files,
+                                     similar_files=[],
+                                     near_duplicate_files=[],
+                                     match_type="identical",
+                                     highest_similarity=1.0,
+                                     highest_sim_percentage=100.0,
+                                     ml_confidence="High")
+
+            # STEP 0: AI CONTENT MODERATION CHECK (FOR UNIQUE FILES)
             print(f"\n========== CONTENT MODERATION CHECK ==========")
             print(f"File: {filename}")
             
@@ -672,9 +863,7 @@ def upload_file():
                 
                 # Log the flagged content in moderation_logs table
                 try:
-                    conn = get_db_connection()
                     flagged_keywords_str = ','.join(moderation_result.flagged_keywords) if moderation_result.flagged_keywords else ''
-                    
                     conn.execute("""
                         INSERT INTO moderation_logs 
                         (user_id, file_name, file_type, file_size, violation_type, 
@@ -684,21 +873,15 @@ def upload_file():
                         current_user.id,
                         filename,
                         file.content_type or 'unknown',
-                        os.path.getsize(temp_path),
+                        file_size,
                         moderation_result.violation_type,
                         moderation_result.violation_details,
                         moderation_result.confidence_score,
                         flagged_keywords_str
                     ))
                     conn.commit()
-                    conn.close()
-                    print(f"[MODERATION] Logged flagged content to database")
-                except Exception as e:
-                    print(f"[MODERATION] Error logging flagged content: {e}")
-                
-                # Create admin alert for suspicious activity
-                try:
-                    conn = get_db_connection()
+                    
+                    # Create admin alert for suspicious activity
                     alert_description = f"User attempted to upload inappropriate content: {filename}"
                     alert_details = f"Violation: {moderation_result.violation_type}\nDetails: {moderation_result.violation_details}\nConfidence: {moderation_result.confidence_score:.2%}"
                     
@@ -714,15 +897,10 @@ def upload_file():
                         alert_details
                     ))
                     conn.commit()
-                    conn.close()
-                    print(f"[MODERATION] Created admin alert")
                 except Exception as e:
-                    print(f"[MODERATION] Error creating alert: {e}")
-                
-                # Show confirmation page instead of rejecting
-                from utils import get_file_hash
-                file_hash = get_file_hash(temp_path)
-                file_size = os.path.getsize(temp_path)
+                    print(f"[MODERATION] Error logging alert: {e}")
+                finally:
+                    conn.close()
                 
                 return render_template('upload_confirmation.html',
                                      filename=filename,
@@ -734,28 +912,8 @@ def upload_file():
             
             print(f"[MODERATION] [OK] Content passed moderation check")
             
-            # Step 1: Compute file hash early for exact duplicate detection
-            from utils import get_file_hash
-            file_hash = get_file_hash(temp_path)
-            file_size = os.path.getsize(temp_path)
-            ext_code = get_ext_code(filename)
-            
-            # Open database connection for all queries
-            conn = get_db_connection()
-            
-            # Check for IDENTICAL files (exact hash match)
-            identical_files = conn.execute("""
-                SELECT id, file_name, file_size, file_hash, upload_timestamp, stored_path 
-                FROM files 
-                WHERE file_hash = ?
-                ORDER BY upload_timestamp DESC
-            """, (file_hash,)).fetchall()
-            
-            # Get frequency
+            # Query frequency and similar files
             freq = conn.execute("SELECT COUNT(*) FROM files WHERE file_name = ?", (filename,)).fetchone()[0]
-            
-            # Find SIMILAR files based on metadata (excluding identical matches)
-            # Only show if: exact same filename OR (very close size AND same extension AND similar name pattern)
             similar_files = conn.execute("""
                 SELECT id, file_name, file_size, file_hash, upload_timestamp, stored_path 
                 FROM files 
@@ -763,8 +921,6 @@ def upload_file():
                 ORDER BY upload_timestamp DESC
                 LIMIT 5
             """, (file_hash, filename)).fetchall()
-            
-            # Close connection after all queries
             conn.close()
             
             # ML Prediction
@@ -775,34 +931,37 @@ def upload_file():
             })
             
             # IMPORTANT: Extract content BEFORE similarity detection
-            # This allows the similarity detector to read the file content
             file_content_text = None
+            dino_embedding_str = None
             try:
-                if ml_client.is_text_file(filename):
-                    file_content_text = ml_client.read_file_content(temp_path)
+                if ml_client.is_image_file(filename):
+                    dino_wrap = ml_client.compute_dinov2_embedding(temp_path)
+                    if dino_wrap:
+                        import json
+                        dino_embedding_str = json.dumps(dino_wrap.tolist())
+                else:
+                    file_content_text = ml_client.read_file_content(temp_path, filename=filename)
                     if file_content_text:
-                        print(f"[DEBUG] Extracted {len(file_content_text)} characters from uploaded file")
-                    else:
-                        print(f"[DEBUG] Could not extract content from {filename}")
+                        print(f"[DEBUG] Extracted {len(file_content_text)} characters from uploaded file ({filename})")
             except Exception as e:
                 print(f"[DEBUG] Content extraction error: {e}")
-                import traceback
-                traceback.print_exc()
             
-            # NEW: Content-level similarity detection (80%+ match)
+            # Content-level similarity detection (60%+ match)
             print(f"\n========== STARTING CONTENT SIMILARITY CHECK ==========")
             print(f"File: {filename}, Hash: {file_hash[:12]}")
             near_duplicate_files = []
+            highest_sim = 0.0
+            highest_matched_file = None
             try:
                 # Query all existing files to pass to ML Service
                 conn_sim = get_db_connection()
                 existing_files_rows = conn_sim.execute("""
                     SELECT f.id, f.file_name, f.file_size, f.file_hash, f.upload_timestamp, 
-                           f.stored_path, 
-                           (SELECT content_text FROM uploads 
+                           f.stored_path, f.dino_embedding,
+                           COALESCE(f.content_text, (SELECT content_text FROM uploads 
                             WHERE file_id = f.id 
                             ORDER BY timestamp DESC 
-                            LIMIT 1) as content_text
+                            LIMIT 1)) as content_text
                     FROM files f
                     WHERE f.file_hash != ?
                     ORDER BY f.upload_timestamp DESC
@@ -818,49 +977,62 @@ def upload_file():
                         'file_hash': row['file_hash'],
                         'upload_timestamp': str(row['upload_timestamp']) if row['upload_timestamp'] else None,
                         'stored_path': row['stored_path'],
-                        'content_text': row['content_text']
+                        'content_text': row.get('content_text'),
+                        'dino_embedding': row.get('dino_embedding')
                     })
                 
-                near_duplicate_files = ml_client.detect_similar_content(temp_path, filename, file_hash, existing_files)
-                print(f"Content similarity check completed. Found {len(near_duplicate_files)} near-duplicates")
+                if existing_files:
+                    all_sim_results = ml_client.detect_similar_content(temp_path, filename, file_hash, existing_files, threshold=0.01)
+                    if all_sim_results:
+                        highest_sim = all_sim_results[0]['similarity']
+                        highest_matched_file = all_sim_results[0]['file_name']
+                        near_duplicate_files = [m for m in all_sim_results if m['similarity'] >= 0.60]
+                        print(f"Content similarity check completed. Found {len(near_duplicate_files)} near-duplicates (>=60%), highest match: {highest_sim:.2%} with {highest_matched_file}")
             except Exception as e:
                 print(f"Content similarity detection error: {e}")
-                import traceback
-                traceback.print_exc()
-
             
             # Determine match type
             match_type = "none"
-            if identical_files:
-                match_type = "identical"
-            elif near_duplicate_files:
+            if near_duplicate_files:
                 match_type = "near_duplicate"
             elif prediction == "Duplicate Likely" or freq > 0 or similar_files:
                 match_type = "similar"
             
-            # If duplicates detected (identical, near-duplicate, or similar), show confirmation page
+            # If duplicates detected (near-duplicate or similar), show confirmation page
             if match_type != "none":
+                highest_sim_percentage = round(highest_sim * 100, 1)
                 return render_template('upload_confirmation.html',
                                      filename=filename,
                                      temp_path=temp_path,
                                      file_size=file_size,
                                      file_hash=file_hash,
                                      prediction=prediction,
-                                     identical_files=identical_files,
+                                     identical_files=[],
                                      similar_files=similar_files,
                                      near_duplicate_files=near_duplicate_files,
                                      match_type=match_type,
-                                     ml_confidence="High" if prediction == "Duplicate Likely" else "Medium")
+                                     highest_similarity=highest_sim,
+                                     highest_sim_percentage=highest_sim_percentage,
+                                     ml_confidence="High" if (prediction == "Duplicate Likely" or highest_sim >= 0.60) else "Medium")
 
-
-            
             # Step 2: Deduplication (if user confirms or no duplicates predicted)
-            is_duplicate, file_id = deduplicator.process_file(temp_path, filename, current_user.id)
+            sim_score = highest_sim if highest_sim > 0 else 0.0
+            sim_match = highest_matched_file if highest_sim > 0 else None
+            is_duplicate, file_id = deduplicator.process_file(temp_path, filename, current_user.id,
+                                                              content_text=file_content_text,
+                                                              similarity_score=sim_score,
+                                                              similarity_match=sim_match,
+                                                              dino_embedding=dino_embedding_str)
             
-            # Store content in uploads table for similarity detection
-            if file_content_text and file_id:
+            # Store content and similarity scores in uploads and files tables
+            if file_id:
                 try:
                     conn = get_db_connection()
+                    conn.execute("""
+                        UPDATE files 
+                        SET content_text = ?, similarity_score = ?, similarity_match = ?, dino_embedding = ? 
+                        WHERE id = ?
+                    """, (file_content_text, sim_score, sim_match, dino_embedding_str, file_id))
                     conn.execute("""
                         UPDATE uploads 
                         SET content_text = ? 
@@ -868,9 +1040,9 @@ def upload_file():
                     """, (file_content_text, file_id, current_user.id))
                     conn.commit()
                     conn.close()
-                    print(f"[DEBUG] Stored content for file_id {file_id}")
+                    print(f"[DEBUG] Stored content & similarity ({sim_score:.1%}) for file_id {file_id}")
                 except Exception as e:
-                    print(f"[DEBUG] Could not store content: {e}")
+                    print(f"[DEBUG] Could not store content/similarity: {e}")
                     
             if file_id and ml_client.is_image_file(filename):
                 try:
@@ -898,7 +1070,6 @@ def upload_file():
                         if is_excessive and dup_msg:
                             flash(dup_msg, 'danger')
 
-            
             if is_duplicate:
                 flash(f"DUPLICATE ALERT: An identical file was already found in the system. Redirecting for access mapping.")
             
@@ -932,25 +1103,86 @@ def confirm_upload():
         flash('File not found. Please upload again.', 'danger')
         return redirect(url_for('upload_file'))
     
-    # Process the file
-    is_duplicate, file_id = deduplicator.process_file(temp_path, filename, current_user.id)
-    
-    # Extract and store content for future similarity checks
+    # Extract content and compute similarity
+    file_content_text = None
+    dino_embedding_str = None
+    highest_sim = 0.0
+    highest_matched_file = None
     try:
-        if ml_client.is_text_file(filename):
-            file_content_text = ml_client.read_file_content(temp_path)
-            if file_content_text and file_id:
-                conn = get_db_connection()
-                conn.execute("""
-                    UPDATE uploads 
-                    SET content_text = ? 
-                    WHERE file_id = ? AND user_id = ?
-                """, (file_content_text, file_id, current_user.id))
-                conn.commit()
-                conn.close()
-                print(f"[DEBUG] Stored content for file_id {file_id} (confirmed upload)")
+        from utils import get_file_hash
+        file_hash = get_file_hash(temp_path)
+        
+        if ml_client.is_image_file(filename):
+            dino_wrap = ml_client.compute_dinov2_embedding(temp_path)
+            if dino_wrap:
+                import json
+                dino_embedding_str = json.dumps(dino_wrap.tolist())
+        else:
+            file_content_text = ml_client.read_file_content(temp_path, filename=filename)
+            
+        conn_sim = get_db_connection()
+        existing_files_rows = conn_sim.execute("""
+            SELECT f.id, f.file_name, f.file_size, f.file_hash, f.upload_timestamp, 
+                   f.stored_path, f.dino_embedding,
+                   COALESCE(f.content_text, (SELECT content_text FROM uploads 
+                    WHERE file_id = f.id 
+                    ORDER BY timestamp DESC 
+                    LIMIT 1)) as content_text
+            FROM files f
+            WHERE f.file_hash != ?
+            ORDER BY f.upload_timestamp DESC
+        """, (file_hash,)).fetchall()
+        conn_sim.close()
+        
+        existing_files = []
+        for row in existing_files_rows:
+            existing_files.append({
+                'id': row['id'],
+                'file_name': row['file_name'],
+                'file_size': row['file_size'],
+                'file_hash': row['file_hash'],
+                'upload_timestamp': str(row['upload_timestamp']) if row['upload_timestamp'] else None,
+                'stored_path': row['stored_path'],
+                'content_text': row.get('content_text'),
+                'dino_embedding': row.get('dino_embedding')
+            })
+            
+        if existing_files:
+            all_sim = ml_client.detect_similar_content(temp_path, filename, file_hash, existing_files, threshold=0.01)
+            if all_sim:
+                highest_sim = all_sim[0]['similarity']
+                highest_matched_file = all_sim[0]['file_name']
     except Exception as e:
-        print(f"[DEBUG] Could not extract/store content: {e}")
+        print(f"[DEBUG] Error extracting content/similarity in confirm_upload: {e}")
+    
+    # Process the file
+    sim_score = highest_sim if highest_sim > 0 else 0.0
+    sim_match = highest_matched_file if highest_sim > 0 else None
+    is_duplicate, file_id = deduplicator.process_file(temp_path, filename, current_user.id,
+                                                      content_text=file_content_text,
+                                                      similarity_score=sim_score,
+                                                      similarity_match=sim_match,
+                                                      dino_embedding=dino_embedding_str)
+    
+    # Store content and similarity scores in uploads and files tables
+    if file_id:
+        try:
+            conn = get_db_connection()
+            conn.execute("""
+                UPDATE files 
+                SET content_text = ?, similarity_score = ?, similarity_match = ?, dino_embedding = ?
+                WHERE id = ?
+            """, (file_content_text, sim_score, sim_match, dino_embedding_str, file_id))
+            conn.execute("""
+                UPDATE uploads 
+                SET content_text = ? 
+                WHERE file_id = ? AND user_id = ?
+            """, (file_content_text, file_id, current_user.id))
+            conn.commit()
+            conn.close()
+            print(f"[DEBUG] Stored content for file_id {file_id} (confirmed upload)")
+        except Exception as e:
+            print(f"[DEBUG] Could not extract/store content: {e}")
         
     if file_id and ml_client.is_image_file(filename):
         try:
@@ -985,6 +1217,7 @@ def confirm_upload():
         os.remove(temp_path)
     
     return redirect(url_for('dashboard'))
+
 
 
 @app.route('/api/check_media_hash', methods=['GET'])
@@ -1202,33 +1435,42 @@ def confirm_audio_upload():
 @login_required
 def dashboard():
     conn = get_db_connection()
-    files = conn.execute("SELECT * FROM files").fetchall()
+    files = conn.execute("SELECT * FROM files").fetchall() or []
     total_files = len(files)
     
-    logical_std = conn.execute("""
+    def safe_sum(query):
+        try:
+            res = conn.execute(query).fetchone()
+            if res is not None:
+                val = res[0]
+                if val is not None:
+                    return int(val) if isinstance(val, (int, float)) else val
+        except Exception as err:
+            print(f"[Dashboard Query Warning] {err}")
+        return 0
+
+    logical_std = safe_sum("""
         SELECT SUM(f.file_size) 
         FROM uploads u 
         JOIN files f ON u.file_id = f.id
-    """).fetchone()[0] or 0
-    physical_std = conn.execute("SELECT SUM(file_size) FROM files").fetchone()[0] or 0
-
-    logical_audio = conn.execute("SELECT SUM(file_size) FROM audio_records").fetchone()[0] or 0
-    physical_audio = conn.execute("""
+    """)
+    physical_std = safe_sum("SELECT SUM(file_size) FROM files")
+    logical_audio = safe_sum("SELECT SUM(file_size) FROM audio_records")
+    physical_audio = safe_sum("""
         SELECT SUM(unique_size) FROM (
             SELECT MAX(file_size) as unique_size 
             FROM audio_records 
             GROUP BY COALESCE(file_hash, CONCAT('no_hash_', id))
         ) t
-    """).fetchone()[0] or 0
-
-    logical_video = conn.execute("SELECT SUM(file_size) FROM video_records").fetchone()[0] or 0
-    physical_video = conn.execute("""
+    """)
+    logical_video = safe_sum("SELECT SUM(file_size) FROM video_records")
+    physical_video = safe_sum("""
         SELECT SUM(unique_size) FROM (
             SELECT MAX(file_size) as unique_size 
             FROM video_records 
             GROUP BY COALESCE(file_hash, CONCAT('no_hash_', id))
         ) t
-    """).fetchone()[0] or 0
+    """)
 
     logical_size = logical_std + logical_audio + logical_video
     physical_size = physical_std + physical_audio + physical_video
@@ -1246,6 +1488,17 @@ def dashboard():
     video_records = conn.execute("SELECT * FROM video_records ORDER BY upload_timestamp DESC").fetchall()
     
     conn.close()
+
+    # Sanitize similarity_score types
+    for r in list(files) + list(audio_records) + list(video_records):
+        if hasattr(r, '_data') and 'similarity_score' in r._data:
+            s_val = r._data['similarity_score']
+            if s_val is not None:
+                try:
+                    r._data['similarity_score'] = float(s_val)
+                except Exception:
+                    r._data['similarity_score'] = None
+
     
     return render_template('dashboard.html', 
                            files=files, 
@@ -1288,8 +1541,10 @@ def moderation_panel():
         """).fetchall()
     
     # Get statistics
-    total_rejections = conn.execute("SELECT COUNT(*) FROM moderation_logs").fetchone()[0]
-    unreviewed_count = conn.execute("SELECT COUNT(*) FROM moderation_logs WHERE reviewed = 0").fetchone()[0]
+    row_tot = conn.execute("SELECT COUNT(*) FROM moderation_logs").fetchone()
+    total_rejections = (row_tot[0] if row_tot is not None else 0) or 0
+    row_unrev = conn.execute("SELECT COUNT(*) FROM moderation_logs WHERE reviewed = 0").fetchone()
+    unreviewed_count = (row_unrev[0] if row_unrev is not None else 0) or 0
     
     conn.close()
     
@@ -1651,7 +1906,8 @@ def delete_audio(audio_id):
     try:
         # 2. Check references of this file in audio_records
         count_cursor = conn.execute("SELECT COUNT(*) FROM audio_records WHERE s3_object_key = ?", (s3_key,))
-        ref_count = count_cursor.fetchone()[0]
+        count_row = count_cursor.fetchone()
+        ref_count = count_row[0] if count_row is not None else 0
         
         if ref_count <= 1:
             if Config.USE_S3:
@@ -1755,9 +2011,15 @@ def audio_status(audio_id):
     if not audio:
         return jsonify({"status": "not_found"}), 404
         
+    sim = 0.0
+    try:
+        sim = float(audio['similarity_score']) if audio.get('similarity_score') is not None else 0.0
+    except Exception:
+        sim = 0.0
+
     return jsonify({
         "status": audio['status'],
-        "similarity": audio['similarity_score'],
+        "similarity": sim,
         "matched_file": audio['matched_file'],
         "matched_transcript": audio['matched_transcript']
     })
@@ -1776,12 +2038,19 @@ def video_status(video_id):
     if not video:
         return jsonify({"status": "not_found"}), 404
         
+    sim = 0.0
+    try:
+        sim = float(video['similarity_score']) if video.get('similarity_score') is not None else 0.0
+    except Exception:
+        sim = 0.0
+
     return jsonify({
         "status": video['status'],
-        "similarity": video['similarity_score'],
+        "similarity": sim,
         "matched_file": video['matched_file'],
         "matched_transcript": video['matched_transcript']
     })
+
 
 @app.route('/video/confirm_store/<int:video_id>', methods=['POST'])
 @login_required
@@ -1968,7 +2237,8 @@ def delete_video(video_id):
     try:
         # 2. Check references of this file in video_records
         count_cursor = conn.execute("SELECT COUNT(*) FROM video_records WHERE s3_object_key = ?", (s3_key,))
-        ref_count = count_cursor.fetchone()[0]
+        count_row = count_cursor.fetchone()
+        ref_count = count_row[0] if count_row is not None else 0
         
         if ref_count <= 1:
             if Config.USE_S3:
@@ -2061,15 +2331,13 @@ if __name__ == '__main__':
         # Check if database exists and has tables
         db_needs_init = False
         
-        # Check if tables exist
+        # Check if collections exist
         try:
-            from mysql_wrapper import get_mysql_connection
-            conn = get_mysql_connection()
-            cursor = conn.execute("SHOW TABLES LIKE 'users'")
-            if cursor.fetchone() is None:
-                print("  Database tables missing, initializing...")
+            from mongo_wrapper import get_mongo_db
+            db = get_mongo_db()
+            if 'users' not in db.list_collection_names() or db.users.count_documents({}) == 0:
+                print("  MongoDB collections missing or empty, initializing...")
                 db_needs_init = True
-            conn.close()
         except Exception:
             db_needs_init = True
         

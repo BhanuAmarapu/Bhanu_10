@@ -1,6 +1,7 @@
 flask
 flask-login
-pymysql
+pymongo
+dnspython
 cryptography
 boto3
 python-dotenv

@@ -46,12 +46,9 @@ DEBUG = False
 HOST = 0.0.0.0
 PORT = 10000
 
-# Database Configuration (MySQL Connection)
-# (Replace with your online database credentials e.g., Aiven, Clever Cloud, or Render Database)
-MYSQL_HOST = your-db-host
-MYSQL_USER = your-db-user
-MYSQL_PASSWORD = your-db-password
-MYSQL_DB = your-db-name
+# Database Configuration (MongoDB Atlas Connection)
+MONGO_URI = mongodb+srv://bhanu89190654_db_user:P6s4X0ODr5bhcwlr@cluster0.clqmce7.mongodb.net/?appName=Cluster0
+MONGO_DB = cloud_dedup
 
 # AWS S3 Cloud Storage Configuration
 USE_S3 = True
@@ -61,7 +58,7 @@ AWS_REGION = ap-southeast-2
 S3_BUCKET_NAME = deduplicationfile
 ```
 
-*Note: If you do not configure an external MySQL database, the application will fallback to using a local SQLite database file, but it will be reset on every Render redeploy/restart. For persistent usage, connect an external MySQL database.*
+*Note: MongoDB Atlas provides persistent, cloud-hosted storage for all user accounts, file records, audio/video analysis metadata, and audit logs.*
 
 ### Step 6: Deploy!
 1. Click **"Create Web Service"**.

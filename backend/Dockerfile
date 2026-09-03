@@ -1,9 +1,8 @@
 FROM python:3.11-slim
 
-# Install system dependencies for MySQL and others
+# Install basic system dependencies
 RUN apt-get update && apt-get install -y \
     gcc \
-    libmariadb-dev \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
